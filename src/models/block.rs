@@ -1,0 +1,75 @@
+use crate::traits::{Hashable, ToBytes};
+use crate::models::transaction::Transaction;
+use ed25519_dalek::{Signature, VerifyingKey};
+
+/// A block contains a list of transactions and a reference to the previous block.
+#[derive(Debug, Clone)]
+pub struct Block {
+    /// The height of the block in the chain (0 for genesis).
+    pub height: u64,
+    /// The hash of the previous block.
+    pub previous_hash: [u8; 32],
+    /// The public key of the validator who forged this block.
+    pub validator: VerifyingKey,
+    /// The transactions included in this block.
+    pub transactions: Vec<Transaction>,
+    /// The signature of the validator proving they forged this block.
+    pub signature: Option<Signature>,
+}
+
+// ============================================================================
+// TODO 7: Implement `ToBytes` for `Block`.
+// Hint: You need to convert the `height`, `previous_hash`, `validator`, and
+// `transactions` into bytes and append them together.
+// Note: Like `Transaction`, we DO NOT include the `signature` in the bytes we hash.
+// ============================================================================
+impl ToBytes for Block {
+    fn to_bytes(&self) -> Vec<u8> {
+        // YOUR CODE HERE
+        unimplemented!("Implement ToBytes for Block")
+    }
+}
+
+impl Block {
+    /// Verifies that the block signature is valid.
+    pub fn is_valid(&self) -> bool {
+        // ====================================================================
+        // TODO 8: Implement signature verification.
+        // 1. Check if the signature is `Some`. If `None`, return false.
+        // 2. Hash the block (using `self.hash()`).
+        // 3. Use `self.validator.verify_strict(...)` to check the signature against the hash.
+        // ====================================================================
+        unimplemented!("Implement signature verification")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{SigningKey, Signer};
+    use rand::rngs::OsRng;
+
+    #[test]
+    fn test_block_signing_and_verification() {
+        let mut csprng = OsRng;
+        let validator_keypair = SigningKey::generate(&mut csprng);
+
+        let mut block = Block {
+            height: 1,
+            previous_hash: [0; 32],
+            validator: validator_keypair.verifying_key(),
+            transactions: vec![],
+            signature: None,
+        };
+
+        // Hash the block (without signature)
+        let hash = block.hash();
+        
+        // Sign the hash
+        let signature = validator_keypair.sign(&hash);
+        block.signature = Some(signature);
+
+        // Verify
+        assert!(block.is_valid());
+    }
+}
