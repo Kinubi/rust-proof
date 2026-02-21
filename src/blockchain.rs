@@ -107,6 +107,10 @@ impl Blockchain {
         self.mempool.clear();
         Ok(())
     }
+
+    pub fn get_mempool(&self) -> Vec<Transaction> {
+        self.mempool.clone()
+    }
 }
 
 #[cfg(test)]

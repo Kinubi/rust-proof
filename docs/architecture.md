@@ -46,6 +46,7 @@ The node is divided into several distinct, concurrent components (tasks) that co
 graph TD
     subgraph "External World"
         Client["Wallets / Block Explorers"]
+        CLI["CLI Wallet (rust-proof-cli)"]
         Network["P2P Network (libp2p)"]
     end
 
@@ -64,6 +65,7 @@ graph TD
 
     %% Communication via Channels
     Client -- "HTTP Requests" --> RPC
+    CLI -- "HTTP Requests" --> RPC
     Network -- "Gossip / Sync" --> NetHandler
     
     RPC -- "NodeCommand::AddTx / Query" --> StateManager
@@ -148,7 +150,7 @@ This mega project is broken down into a series of chapters, each focusing on spe
 
 ### Chapter 3: Concurrency, Channels, and the Node Architecture
 *   **Focus:** `tokio`, Async/Await, Message Passing (MPSC/oneshot channels), Actor Model.
-*   **What you build:** The core `node` architecture. You create the State Manager task that exclusively owns the blockchain state and processes commands concurrently from other parts of the system.
+*   **What you build:** The core `node` architecture. You create the State Manager task that exclusively owns the blockchain state and processes commands concurrently from other parts of the system. You will also write the `main.rs` entry point to boot up the `tokio` runtime and start the node, allowing you to run the binary for the first time.
 
 ### Chapter 4: Proof of Stake Consensus
 *   **Focus:** Enums as Data Structures, Pattern Matching (`match` / `if let`), Iterators, Determinism.
@@ -169,6 +171,10 @@ This mega project is broken down into a series of chapters, each focusing on spe
 ### Chapter 8: JSON-RPC API (Upcoming)
 *   **Focus:** Web Frameworks (e.g., `axum` or `warp`), Serialization (`serde` for JSON), Error Mapping.
 *   **What you build:** The `rpc` module. You expose an HTTP server that allows external wallets and block explorers to query the state and submit transactions.
+
+### Chapter 9: The Command Line Interface (CLI) (Upcoming)
+*   **Focus:** Argument Parsing (`clap`), Terminal UI, Interacting with APIs.
+*   **What you build:** A separate binary (`src/main.rs` or a new crate) that acts as a wallet and node controller. You will build commands to generate keypairs, construct and sign transactions, and send them to the node via the JSON-RPC API.
 
 By completing this journey, you will master:
 *   **Advanced Rust Ownership & Lifetimes:** Managing complex, interconnected data structures across threads and asynchronous boundaries.

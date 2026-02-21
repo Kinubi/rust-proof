@@ -14,7 +14,20 @@ use tokio::sync::{ mpsc, oneshot };
 // ============================================================================
 #[derive(Debug)]
 pub enum NodeCommand {
-    // YOUR CODE HERE
+    AddTransaction {
+        transaction: Transaction,
+        responder: oneshot::Sender<Result<(), &'static str>>,
+    },
+    AddBlock {
+        block: Block,
+        responder: oneshot::Sender<Result<(), &'static str>>,
+    },
+    GetLatestBlock {
+        responder: oneshot::Sender<Block>,
+    },
+    GetMempool {
+        responder: oneshot::Sender<Vec<Transaction>>,
+    },
 }
 
 /// The Node is the central state manager. It owns the Blockchain and processes
@@ -26,7 +39,8 @@ pub enum NodeCommand {
 // - `receiver`: The receiving half of an MPSC channel (`mpsc::Receiver<NodeCommand>`).
 // ============================================================================
 pub struct Node {
-    // YOUR CODE HERE
+    blockchain: Blockchain,
+    receiver: mpsc::Receiver<NodeCommand>,
 }
 
 impl Node {
@@ -38,7 +52,12 @@ impl Node {
         // 2. Initialize a new `Blockchain`.
         // 3. Return the `Node` instance and the `Sender` half of the channel.
         // ====================================================================
-        unimplemented!("Implement Node::new")
+        let (sender, receiver) = mpsc::channel(100);
+        let node = Node {
+            blockchain: Blockchain::new(),
+            receiver,
+        };
+        (node, sender)
     }
 
     /// The main loop of the Node. It continuously listens for commands and processes them.
@@ -54,7 +73,26 @@ impl Node {
         // 6. For `GetMempool`, clone the mempool and send it back.
         // Note: `responder.send(...)` returns a Result. You can usually ignore the error if the receiver dropped the channel (e.g., `let _ = responder.send(...);`).
         // ====================================================================
-        unimplemented!("Implement the Node's main event loop")
+        while let Some(cmd) = self.receiver.recv().await {
+            match cmd {
+                NodeCommand::AddTransaction { transaction, responder } => {
+                    let result = self.blockchain.add_transaction(transaction);
+                    let _ = responder.send(result);
+                }
+                NodeCommand::AddBlock { block, responder } => {
+                    let result = self.blockchain.add_block(block);
+                    let _ = responder.send(result);
+                }
+                NodeCommand::GetLatestBlock { responder } => {
+                    let latest_block = self.blockchain.get_latest_block().clone();
+                    let _ = responder.send(latest_block);
+                }
+                NodeCommand::GetMempool { responder } => {
+                    let mempool = self.blockchain.get_mempool();
+                    let _ = responder.send(mempool);
+                }
+            }
+        }
     }
 }
 
@@ -75,10 +113,10 @@ mod tests {
         });
 
         // Test GetLatestBlock
-        // let (resp_tx, resp_rx) = oneshot::channel();
-        // sender.send(NodeCommand::GetLatestBlock { responder: resp_tx }).await.unwrap();
-        // let latest_block = resp_rx.await.unwrap();
-        // assert_eq!(latest_block.height, 0); // Genesis block
+        let (resp_tx, resp_rx) = oneshot::channel();
+        sender.send(NodeCommand::GetLatestBlock { responder: resp_tx }).await.unwrap();
+        let latest_block = resp_rx.await.unwrap();
+        assert_eq!(latest_block.height, 0); // Genesis block
 
         // Test AddTransaction
         let mut csprng = OsRng;
@@ -95,12 +133,14 @@ mod tests {
         let hash = tx.hash();
         tx.signature = Some(sender_keypair.sign(&hash[..]));
 
-        // let (resp_tx, resp_rx) = oneshot::channel();
+        let (resp_tx, resp_rx) = oneshot::channel();
         // We use a dummy command here just to make the test compile while you implement the enum
-        // sender.send(NodeCommand::AddTransaction { tx: tx.clone(), responder: resp_tx }).await.unwrap();
+        sender
+            .send(NodeCommand::AddTransaction { transaction: tx.clone(), responder: resp_tx }).await
+            .unwrap();
 
         // It should fail because the sender has no balance in the genesis state
-        // let result = resp_rx.await.unwrap();
-        // assert!(result.is_err());
+        let result = resp_rx.await.unwrap();
+        assert!(result.is_err());
     }
 }

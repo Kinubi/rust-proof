@@ -56,4 +56,12 @@ We will create a new module: `node.rs`.
     6. For `GetMempool`, clone the mempool and send it back.
     *Note: `responder.send(...)` returns a Result. You can usually ignore the error if the receiver dropped the channel (e.g., `let _ = responder.send(...);`).*
 
-Go to `Cargo.toml` and add `tokio`. Then create `src/node.rs` and complete the `TODO`s. Run `cargo check` to verify your implementation.
+### Step 5: Running the Node (`src/main.rs`)
+Once your `Node` is implemented, it's time to actually run the binary!
+1. Open `src/main.rs`.
+2. Add the `#[tokio::main]` macro to your `main` function.
+3. Inside `main`, call `Node::new()`.
+4. Spawn the node's `run` loop in a background task using `tokio::spawn`.
+5. For now, just add a `loop { tokio::time::sleep(std::time::Duration::from_secs(1)).await; }` at the end of `main` to keep the program running indefinitely.
+
+Go to `Cargo.toml` and add `tokio`. Then create `src/node.rs` and complete the `TODO`s. Finally, update `src/main.rs` and run `cargo run` to boot up your node!
