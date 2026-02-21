@@ -93,7 +93,7 @@ mod tests {
             signature: None,
         };
         let hash = tx.hash();
-        tx.signature = Some(sender_keypair.sign(&hash));
+        tx.signature = Some(sender_keypair.sign(&hash[..]));
 
         // let (resp_tx, resp_rx) = oneshot::channel();
         // We use a dummy command here just to make the test compile while you implement the enum

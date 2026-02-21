@@ -14,7 +14,9 @@ use crate::traits::Hashable;
 // ============================================================================
 #[derive(Debug, Clone)]
 pub struct Blockchain {
-    // YOUR CODE HERE
+    chain: Vec<Block>,
+    state: State,
+    mempool: Vec<Transaction>,
 }
 
 impl Blockchain {
@@ -27,7 +29,18 @@ impl Blockchain {
     // 3. Return the `Blockchain` instance with the genesis block in the chain.
     // ====================================================================
     pub fn new() -> Self {
-        unimplemented!("Implement Blockchain::new")
+        let genesis_block = Block {
+            height: 0,
+            previous_hash: [0u8; 32],
+            validator: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap(),
+            transactions: vec![],
+            signature: None,
+        };
+        Self {
+            chain: vec![genesis_block],
+            state: State::new(),
+            mempool: vec![],
+        }
     }
 
     /// Returns the latest block in the chain.
@@ -37,7 +50,7 @@ impl Blockchain {
     // You can use `.last().expect(...)` since the chain should never be empty.
     // ====================================================================
     pub fn get_latest_block(&self) -> &Block {
-        unimplemented!("Implement get_latest_block")
+        self.chain.last().expect("Blockchain should always have at least the genesis block")
     }
 
     /// Adds a transaction to the mempool if it is valid against the current state.
@@ -48,7 +61,12 @@ impl Blockchain {
         // 2. If valid, push it to the mempool and return `Ok(())`.
         // 3. If invalid, return `Err("Invalid transaction")`.
         // ====================================================================
-        unimplemented!("Implement adding a transaction to the mempool")
+        if self.state.is_valid_tx(&tx) {
+            self.mempool.push(tx);
+            Ok(())
+        } else {
+            Err("Invalid transaction")
+        }
     }
 
     /// Adds a new block to the chain if it is valid.
@@ -67,7 +85,27 @@ impl Blockchain {
         //    If all are valid, replace `self.state` with the temporary state, push the block to `self.chain`, and clear the mempool (or remove the included txs).
         //    For now, just clear the mempool completely when a block is added.
         // ====================================================================
-        unimplemented!("Implement adding a block to the chain")
+        if !block.is_valid() {
+            return Err("Invalid block signature");
+        }
+        let latest_block = self.get_latest_block();
+        if block.height != latest_block.height + 1 {
+            return Err("Invalid block height");
+        }
+        if block.previous_hash != latest_block.hash() {
+            return Err("Invalid previous hash");
+        }
+        let mut temp_state = self.state.clone();
+        for tx in &block.transactions {
+            if !temp_state.is_valid_tx(tx) {
+                return Err("Invalid transaction in block");
+            }
+            temp_state.apply_tx(tx);
+        }
+        self.state = temp_state;
+        self.chain.push(block);
+        self.mempool.clear();
+        Ok(())
     }
 }
 
@@ -86,7 +124,7 @@ mod tests {
 
         let mut blockchain = Blockchain::new();
         // Give sender some initial balance
-        // blockchain.state.balances.insert(*sender_keypair.verifying_key().as_bytes(), 100);
+        blockchain.state.balances.insert(*sender_keypair.verifying_key().as_bytes(), 100);
 
         let mut tx = Transaction {
             sender: sender_keypair.verifying_key(),
@@ -96,28 +134,28 @@ mod tests {
             signature: None,
         };
         let hash = tx.hash();
-        tx.signature = Some(sender_keypair.sign(&hash));
+        tx.signature = Some(sender_keypair.sign(&hash[..]));
 
         // Add transaction to mempool
-        // assert!(blockchain.add_transaction(tx.clone()).is_ok());
-        // assert_eq!(blockchain.mempool.len(), 1);
+        assert!(blockchain.add_transaction(tx.clone()).is_ok());
+        assert_eq!(blockchain.mempool.len(), 1);
 
         // Create a block
-        // let latest_block = blockchain.get_latest_block();
-        // let mut block = Block {
-        //     height: latest_block.height + 1,
-        //     previous_hash: latest_block.hash(),
-        //     validator: validator_keypair.verifying_key(),
-        //     transactions: vec![tx],
-        //     signature: None,
-        // };
-        // let block_hash = block.hash();
-        // block.signature = Some(validator_keypair.sign(&block_hash));
+        let latest_block = blockchain.get_latest_block();
+        let mut block = Block {
+            height: latest_block.height + 1,
+            previous_hash: latest_block.hash(),
+            validator: validator_keypair.verifying_key(),
+            transactions: vec![tx],
+            signature: None,
+        };
+        let block_hash = block.hash();
+        block.signature = Some(validator_keypair.sign(&block_hash[..]));
 
         // Add block to chain
-        // assert!(blockchain.add_block(block).is_ok());
-        // assert_eq!(blockchain.chain.len(), 2);
-        // assert_eq!(blockchain.mempool.len(), 0);
-        // assert_eq!(blockchain.state.get_balance(&sender_keypair.verifying_key()), 50);
+        assert!(blockchain.add_block(block).is_ok());
+        assert_eq!(blockchain.chain.len(), 2);
+        assert_eq!(blockchain.mempool.len(), 0);
+        assert_eq!(blockchain.state.get_balance(&sender_keypair.verifying_key()), 50);
     }
 }

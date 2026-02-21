@@ -150,17 +150,17 @@ This mega project is broken down into a series of chapters, each focusing on spe
 *   **Focus:** `tokio`, Async/Await, Message Passing (MPSC/oneshot channels), Actor Model.
 *   **What you build:** The core `node` architecture. You create the State Manager task that exclusively owns the blockchain state and processes commands concurrently from other parts of the system.
 
-### Chapter 4: Persistent Storage and Merkle Trees (Upcoming)
+### Chapter 4: Proof of Stake Consensus
+*   **Focus:** Enums as Data Structures, Pattern Matching (`match` / `if let`), Iterators, Determinism.
+*   **What you build:** You refactor the `Transaction` model to support both `Transfer` and `Stake` operations using enums. You update the `State` to track validator stakes and implement a deterministic, round-robin algorithm to select the next block proposer.
+
+### Chapter 5: Persistent Storage and Merkle Trees (Upcoming)
 *   **Focus:** External Crates (e.g., `rocksdb`), Trait Objects (`Box<dyn Storage>`), Advanced Data Structures.
 *   **What you build:** The `storage` module. You move from in-memory HashMaps to a persistent Key-Value store. You also implement a Merkle Trie to compute cryptographic state roots.
 
-### Chapter 5: The Mempool and Fee Markets (Upcoming)
+### Chapter 6: The Mempool and Fee Markets (Upcoming)
 *   **Focus:** `BTreeMap` / `BinaryHeap` for sorting, Custom Ordering (`Ord`, `PartialOrd`), Lifetimes.
 *   **What you build:** The `mempool` module. You implement a priority queue for pending transactions based on gas fees, and logic to evict stale transactions.
-
-### Chapter 6: Proof of Stake Consensus (Upcoming)
-*   **Focus:** Complex State Mutations, Cryptographic Proofs, Time/Duration handling.
-*   **What you build:** The `consensus` module. You implement Epochs, Slots, Staking/Unstaking mechanics, validator selection, and slashing conditions for malicious behavior.
 
 ### Chapter 7: Peer-to-Peer Networking (Upcoming)
 *   **Focus:** `libp2p`, Streams, Network Protocols, Complex Async State Machines.
