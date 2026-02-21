@@ -4,13 +4,6 @@ use crate::models::transaction::{ Transaction, TransactionData };
 use crate::traits::{ ToBytes, Hashable };
 
 /// The State represents the current balances and sequence numbers of all accounts.
-// ============================================================================
-// TODO 1: Define the `State` struct.
-// It needs to keep track of:
-// - `balances`: A mapping from an account's public key (as `[u8; 32]`) to its balance (`u64`).
-// - `nonces`: A mapping from an account's public key to its next expected sequence number (`u64`).
-// Hint: Use `std::collections::HashMap`.
-// ============================================================================
 #[derive(Debug, Clone, Default)]
 pub struct State {
     pub balances: HashMap<[u8; 32], u64>,
@@ -19,10 +12,6 @@ pub struct State {
 }
 
 impl State {
-    // ====================================================================
-    // TODO 2: Implement `State::new()`.
-    // Initialize the HashMaps.
-    // ====================================================================
     pub fn new() -> Self {
         Self {
             balances: HashMap::new(),
@@ -32,10 +21,6 @@ impl State {
     }
 
     /// Returns the balance of an account.
-    // ====================================================================
-    // TODO 3: Implement `get_balance`.
-    // Return the balance if it exists, otherwise return 0.
-    // ====================================================================
     pub fn get_balance(&self, account: &VerifyingKey) -> u64 {
         let key_bytes = account.to_bytes();
         let mut key_array = [0u8; 32];
@@ -44,10 +29,6 @@ impl State {
     }
 
     /// Returns the next expected sequence number for an account.
-    // ====================================================================
-    // TODO 4: Implement `get_nonce`.
-    // Return the nonce if it exists, otherwise return 0.
-    // ====================================================================
     pub fn get_nonce(&self, account: &VerifyingKey) -> u64 {
         let key_bytes = account.to_bytes();
         let mut key_array = [0u8; 32];
@@ -58,12 +39,6 @@ impl State {
     /// Validates a transaction against the current state.
     /// Returns true if the transaction is valid, false otherwise.
     pub fn is_valid_tx(&self, tx: &Transaction) -> bool {
-        // ====================================================================
-        // TODO 5: Implement state validation for a transaction.
-        // 1. Check if the transaction's cryptographic signature is valid (use `tx.is_valid()`).
-        // 2. Check if the sender has enough balance (`self.get_balance(...) >= tx.amount`).
-        // 3. Check if the transaction's sequence number matches the expected nonce (`self.get_nonce(...) == tx.sequence`).
-        // ====================================================================
         let tx_valid = tx.is_valid();
         let sender_balance = self.get_balance(&tx.sender);
         match &tx.data {
@@ -88,13 +63,6 @@ impl State {
     /// Applies a transaction to the state, updating balances and nonces.
     /// Assumes the transaction has already been validated.
     pub fn apply_tx(&mut self, tx: &Transaction) {
-        // ====================================================================
-        // TODO 6: Implement applying a transaction to the state.
-        // 1. Subtract the amount from the sender's balance.
-        // 2. Add the amount to the receiver's balance.
-        // 3. Increment the sender's nonce.
-        // Hint: Use `self.balances.entry(...).or_insert(0)` to modify balances.
-        // ====================================================================
         let sender_key_bytes = tx.sender.to_bytes();
         let mut sender_key_array = [0u8; 32];
         sender_key_array.copy_from_slice(&sender_key_bytes);
@@ -189,6 +157,7 @@ mod tests {
                 amount,
             },
             sequence,
+            fee: 10,
             signature: None,
         };
         let hash = tx.hash();

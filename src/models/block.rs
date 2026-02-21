@@ -17,12 +17,6 @@ pub struct Block {
     pub signature: Option<Signature>,
 }
 
-// ============================================================================
-// TODO 7: Implement `ToBytes` for `Block`.
-// Hint: You need to convert the `height`, `previous_hash`, `validator`, and
-// `transactions` into bytes and append them together.
-// Note: Like `Transaction`, we DO NOT include the `signature` in the bytes we hash.
-// ============================================================================
 impl ToBytes for Block {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -37,12 +31,6 @@ impl ToBytes for Block {
 impl Block {
     /// Verifies that the block signature is valid.
     pub fn is_valid(&self) -> bool {
-        // ====================================================================
-        // TODO 8: Implement signature verification.
-        // 1. Check if the signature is `Some`. If `None`, return false.
-        // 2. Hash the block (using `self.hash()`).
-        // 3. Use `self.validator.verify_strict(...)` to check the signature against the hash.
-        // ====================================================================
         if let Some(signature) = &self.signature {
             let hash = self.hash();
             self.validator.verify_strict(&hash[..], signature).is_ok()

@@ -1,5 +1,6 @@
 use crate::traits::{ Hashable, ToBytes };
 use ed25519_dalek::{ Signature, VerifyingKey };
+use std::cmp::Ordering;
 
 /// A transaction represents a transfer of value from one account to another.
 #[derive(Debug, Clone)]
@@ -10,6 +11,8 @@ pub struct Transaction {
     pub data: TransactionData,
     /// A unique number to prevent replay attacks (like a nonce).
     pub sequence: u64,
+    /// The fee paid to the validator for including this transaction.
+    pub fee: u64,
     /// The cryptographic signature proving the sender authorized this transaction.
     pub signature: Option<Signature>,
 }
@@ -25,14 +28,6 @@ pub enum TransactionData {
     },
 }
 
-// ============================================================================
-// TODO 5: Implement `ToBytes` for `Transaction`.
-// Hint: You need to convert the `sender`, `receiver`, `amount`, and `sequence`
-// into bytes and append them together.
-// Note: We DO NOT include the `signature` in the bytes we hash. Why?
-// Because the signature is created BY hashing the transaction. If the signature
-// was part of the hash, it would be a circular dependency!
-// ============================================================================
 impl ToBytes for Transaction {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -49,6 +44,7 @@ impl ToBytes for Transaction {
             }
         }
         bytes.extend_from_slice(&self.sequence.to_be_bytes());
+        bytes.extend_from_slice(&self.fee.to_be_bytes());
         bytes
     }
 }
@@ -56,17 +52,47 @@ impl ToBytes for Transaction {
 impl Transaction {
     /// Verifies that the transaction signature is valid.
     pub fn is_valid(&self) -> bool {
-        // ====================================================================
-        // TODO 6: Implement signature verification.
-        // 1. Check if the signature is `Some`. If `None`, return false.
-        // 2. Hash the transaction (using `self.hash()`).
-        // 3. Use `self.sender.verify_strict(...)` to check the signature against the hash.
-        // ====================================================================
         if let Some(signature) = &self.signature {
             let hash = self.hash();
             self.sender.verify_strict(&hash[..], signature).is_ok()
         } else {
             return false;
+        }
+    }
+}
+
+// ============================================================================
+// TODO 7: Implement Custom Ordering for `Transaction`.
+// To use `Transaction` in a `BTreeSet` (for the mempool), it needs to be sortable.
+// 1. Implement `PartialEq` and `Eq` (you can just compare their hashes).
+// 2. Implement `PartialOrd` and `Ord`.
+//    - In `Ord::cmp`, sort by `fee` DESCENDING (highest fee first).
+//    - If fees are equal, use the transaction hash as a tie-breaker to ensure
+//      deterministic ordering.
+// ============================================================================
+impl PartialEq for Transaction {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash() == other.hash()
+    }
+}
+
+impl Eq for Transaction {}
+
+impl PartialOrd for Transaction {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Transaction {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // Compare fees (descending)
+        match self.fee.cmp(&other.fee).reverse() {
+            Ordering::Equal => {
+                // If fees are equal, compare hashes (ascending)
+                self.hash().cmp(&other.hash())
+            }
+            other => other,
         }
     }
 }
@@ -90,6 +116,7 @@ mod tests {
                 amount: 100,
             },
             sequence: 1,
+            fee: 10,
             signature: None,
         };
 

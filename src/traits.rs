@@ -14,10 +14,6 @@ pub trait Hashable {
     fn hash(&self) -> [u8; 32];
 }
 
-// ============================================================================
-// TODO 1: Implement `ToBytes` for `u64`
-// Hint: Use `self.to_be_bytes()` and convert it to a `Vec<u8>`.
-// ============================================================================
 impl ToBytes for u64 {
     fn to_bytes(&self) -> Vec<u8> {
         let bytes = self.to_be_bytes();
@@ -25,12 +21,6 @@ impl ToBytes for u64 {
     }
 }
 
-// ============================================================================
-// TODO 2: Implement `ToBytes` for `String`
-// Hint: A string is just a sequence of bytes. However, when we deserialize
-// later, we need to know how long the string is.
-// So, first write the length of the string as a `u64`, then write the actual bytes.
-// ============================================================================
 impl ToBytes for String {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -41,12 +31,6 @@ impl ToBytes for String {
     }
 }
 
-// ============================================================================
-// TODO 3: Implement `ToBytes` for `Vec<T>` where `T` also implements `ToBytes`.
-// Hint: This is your first complex trait bound!
-// Like strings, write the length of the vector as a `u64` first.
-// Then iterate over the items, call `.to_bytes()` on each, and append them.
-// ============================================================================
 impl<T: ToBytes> ToBytes for Vec<T> {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -59,11 +43,6 @@ impl<T: ToBytes> ToBytes for Vec<T> {
     }
 }
 
-// ============================================================================
-// TODO 3.5: Implement `ToBytes` for `[u8; 32]` and `VerifyingKey`.
-// Hint: `[u8; 32]` is already bytes, just convert it to a `Vec<u8>`.
-// Hint: `VerifyingKey` has a `.to_bytes()` method that returns `[u8; 32]`.
-// ============================================================================
 impl ToBytes for [u8; 32] {
     fn to_bytes(&self) -> Vec<u8> {
         self.to_vec()
@@ -84,14 +63,6 @@ impl ToBytes for VerifyingKey {
     }
 }
 
-// ============================================================================
-// TODO 4: Implement `Hashable` for ANY type `T` that implements `ToBytes`.
-// Hint: This is called a "Blanket Implementation".
-// 1. Call `self.to_bytes()`.
-// 2. Create a new `Sha256` hasher: `let mut hasher = Sha256::new();`
-// 3. Update the hasher with the bytes: `hasher.update(&bytes);`
-// 4. Finalize the hash and convert it to a `[u8; 32]`.
-// ============================================================================
 impl<T: ToBytes> Hashable for T {
     fn hash(&self) -> [u8; 32] {
         let bytes = self.to_bytes();

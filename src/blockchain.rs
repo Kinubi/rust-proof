@@ -3,33 +3,20 @@ use crate::models::transaction::Transaction;
 use crate::state::State;
 use crate::storage::Storage;
 use crate::traits::Hashable;
+use crate::mempool::Mempool;
 
 /// The Blockchain represents the entire ledger, including the chain of blocks,
 /// the current state, and the mempool of pending transactions.
-// ============================================================================
-// TODO 1: Define the `Blockchain` struct.
-// It needs to hold:
-// - `chain`: A `Vec<Block>`.
-// - `state`: A `State` instance.
-// - `mempool`: A `Vec<Transaction>`.
-// ============================================================================
 #[derive(Debug, Clone)]
 pub struct Blockchain {
     chain: Vec<Block>,
     state: State,
-    mempool: Vec<Transaction>,
+    mempool: Mempool,
     storage: Box<dyn Storage>,
 }
 
 impl Blockchain {
     /// Creates a new blockchain with a genesis block.
-    // ====================================================================
-    // TODO 2: Implement `Blockchain::new()`.
-    // 1. Create a genesis block (height 0, empty previous_hash, empty transactions).
-    //    You can use a dummy validator key (e.g., all zeros).
-    // 2. Initialize the `State` and `mempool`.
-    // 3. Return the `Blockchain` instance with the genesis block in the chain.
-    // ====================================================================
     pub fn new(storage: Box<dyn Storage>) -> Self {
         let genesis_block = Block {
             height: 0,
@@ -41,31 +28,20 @@ impl Blockchain {
         Self {
             chain: vec![genesis_block],
             state: State::new(),
-            mempool: vec![],
+            mempool: Mempool::new(10000), // Set a default max size for the mempool
             storage,
         }
     }
 
     /// Returns the latest block in the chain.
-    // ====================================================================
-    // TODO 3: Implement `get_latest_block`.
-    // Return a reference to the last block in the `chain` vector.
-    // You can use `.last().expect(...)` since the chain should never be empty.
-    // ====================================================================
     pub fn get_latest_block(&self) -> &Block {
         self.chain.last().expect("Blockchain should always have at least the genesis block")
     }
 
     /// Adds a transaction to the mempool if it is valid against the current state.
     pub fn add_transaction(&mut self, tx: Transaction) -> Result<(), &'static str> {
-        // ====================================================================
-        // TODO 4: Implement adding a transaction to the mempool.
-        // 1. Check if the transaction is valid against the current state (`self.state.is_valid_tx(...)`).
-        // 2. If valid, push it to the mempool and return `Ok(())`.
-        // 3. If invalid, return `Err("Invalid transaction")`.
-        // ====================================================================
         if self.state.is_valid_tx(&tx) {
-            self.mempool.push(tx);
+            self.mempool.add_transaction(tx)?;
             Ok(())
         } else {
             Err("Invalid transaction")
@@ -74,20 +50,6 @@ impl Blockchain {
 
     /// Adds a new block to the chain if it is valid.
     pub fn add_block(&mut self, block: Block) -> Result<(), &'static str> {
-        // ====================================================================
-        // TODO 5: Implement adding a block to the chain.
-        // 1. Check if the block's cryptographic signature is valid (`block.is_valid()`).
-        // 2. Check if the block's height is exactly one greater than the latest block's height.
-        // 3. Check if the block's previous_hash matches the hash of the latest block.
-        // 4. Iterate over the block's transactions and check if they are valid against the current state.
-        //    (Hint: You might need to clone the state to simulate applying them, or just apply them and rollback if one fails.
-        //     For simplicity, let's assume all transactions in the block must be valid against the state *as they are applied sequentially*).
-        //    Actually, a simpler approach for this exercise:
-        //    Create a temporary state clone. Apply each transaction to the temporary state.
-        //    If any transaction is invalid, return `Err("Invalid transaction in block")`.
-        //    If all are valid, replace `self.state` with the temporary state, push the block to `self.chain`, and clear the mempool (or remove the included txs).
-        //    For now, just clear the mempool completely when a block is added.
-        // ====================================================================
         if !block.is_valid() {
             return Err("Invalid block signature");
         }
@@ -123,12 +85,14 @@ impl Blockchain {
             return Err("Failed to save state root to storage");
         }
         self.chain.push(block);
-        self.mempool.clear();
+        for tx in &self.chain.last().unwrap().transactions {
+            self.mempool.remove_transaction(&tx.hash());
+        }
         Ok(())
     }
 
     pub fn get_mempool(&self) -> Vec<Transaction> {
-        self.mempool.clone()
+        self.mempool.get_pending_transactions(self.mempool.len())
     }
 }
 
@@ -161,6 +125,7 @@ mod tests {
                 amount: 50,
             },
             sequence: 0,
+            fee: 10,
             signature: None,
         };
         let hash = tx.hash();
