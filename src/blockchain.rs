@@ -95,6 +95,11 @@ impl Blockchain {
         if block.previous_hash != latest_block.hash() {
             return Err("Invalid previous hash");
         }
+        if let Some(expected_validator) = self.state.get_expected_validator(block.height) {
+            if block.validator != expected_validator {
+                return Err("Invalid block validator");
+            }
+        }
         let mut temp_state = self.state.clone();
         for tx in &block.transactions {
             if !temp_state.is_valid_tx(tx) {
@@ -165,5 +170,73 @@ mod tests {
         assert_eq!(blockchain.chain.len(), 2);
         assert_eq!(blockchain.mempool.len(), 0);
         assert_eq!(blockchain.state.get_balance(&sender_keypair.verifying_key()), 50);
+    }
+
+    #[test]
+    fn test_enforce_consensus_validator() {
+        let mut csprng = OsRng;
+        let validator1 = SigningKey::generate(&mut csprng);
+        let validator2 = SigningKey::generate(&mut csprng);
+
+        let mut blockchain = Blockchain::new();
+
+        // Add stakes to the state so we have a validator pool
+        blockchain.state.stakes.insert(validator1.verifying_key().to_bytes(), 100);
+        blockchain.state.stakes.insert(validator2.verifying_key().to_bytes(), 200);
+
+        // Find out who is SUPPOSED to forge block 1
+        let expected_validator = blockchain.state.get_expected_validator(1).unwrap();
+
+        // Figure out who the "wrong" validator is
+        let wrong_validator = if expected_validator == validator1.verifying_key() {
+            &validator2
+        } else {
+            &validator1
+        };
+
+        // We need to extract the height and hash so we don't hold an immutable borrow
+        // on `blockchain` while trying to call `blockchain.add_block` (which requires a mutable borrow).
+        let latest_height = blockchain.get_latest_block().height;
+        let latest_hash = blockchain.get_latest_block().hash();
+
+        // 1. Try to add a block forged by the WRONG validator
+        let mut bad_block = Block {
+            height: latest_height + 1,
+            previous_hash: latest_hash,
+            validator: wrong_validator.verifying_key(),
+            transactions: vec![],
+            signature: None,
+        };
+        let bad_hash = bad_block.hash();
+        bad_block.signature = Some(wrong_validator.sign(&bad_hash[..]));
+
+        let result = blockchain.add_block(bad_block);
+        assert!(
+            result.is_err(),
+            "Block should be rejected because it was forged by the wrong validator"
+        );
+        assert_eq!(result.unwrap_err(), "Invalid block validator");
+
+        // 2. Try to add a block forged by the CORRECT validator
+        let correct_validator = if expected_validator == validator1.verifying_key() {
+            &validator1
+        } else {
+            &validator2
+        };
+
+        let mut good_block = Block {
+            height: latest_height + 1,
+            previous_hash: latest_hash,
+            validator: correct_validator.verifying_key(),
+            transactions: vec![],
+            signature: None,
+        };
+        let good_hash = good_block.hash();
+        good_block.signature = Some(correct_validator.sign(&good_hash[..]));
+
+        assert!(
+            blockchain.add_block(good_block).is_ok(),
+            "Block should be accepted because it was forged by the correct validator"
+        );
     }
 }

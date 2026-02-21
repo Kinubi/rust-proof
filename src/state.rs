@@ -247,4 +247,40 @@ mod tests {
             "Transaction should be invalid due to tampered data/bad signature"
         );
     }
+
+    #[test]
+    fn test_validator_selection() {
+        let mut csprng = OsRng;
+        let val1 = SigningKey::generate(&mut csprng);
+        let val2 = SigningKey::generate(&mut csprng);
+        let val3 = SigningKey::generate(&mut csprng);
+
+        let mut state = State::new();
+
+        // No validators yet
+        assert!(state.get_expected_validator(1).is_none());
+
+        // Add stakes
+        state.stakes.insert(val1.verifying_key().to_bytes(), 100);
+        state.stakes.insert(val2.verifying_key().to_bytes(), 200);
+        state.stakes.insert(val3.verifying_key().to_bytes(), 300);
+
+        // Total stake is 600.
+        // Because HashMap iteration order is random, we can't easily assert *which* specific
+        // validator wins a specific block height unless we sort the keys in `get_expected_validator`.
+        // But we CAN assert that it always returns *some* valid validator.
+
+        let winner_block_1 = state.get_expected_validator(1).unwrap();
+        assert!(
+            winner_block_1 == val1.verifying_key() ||
+                winner_block_1 == val2.verifying_key() ||
+                winner_block_1 == val3.verifying_key()
+        );
+
+        // If you implemented the sorting logic in `get_expected_validator` (as hinted in Chapter 4),
+        // you can write deterministic assertions here! For example, if sorted by bytes:
+        // let mut keys = vec![val1.verifying_key().to_bytes(), val2.verifying_key().to_bytes(), val3.verifying_key().to_bytes()];
+        // keys.sort();
+        // ... then you can calculate exactly who should win block 1, 2, 3, etc.
+    }
 }
