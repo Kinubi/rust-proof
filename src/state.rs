@@ -113,6 +113,24 @@ impl State {
             }
         }
     }
+
+    pub fn get_expected_validator(&self, next_block_height: u64) -> Option<VerifyingKey> {
+        if self.stakes.is_empty() {
+            return None;
+        }
+        let total_stake: u64 = self.stakes.values().sum();
+        let winning_ticket = next_block_height % total_stake;
+        let mut cumulative_stake = 0;
+        for (key_bytes, stake) in &self.stakes {
+            cumulative_stake += *stake;
+            if winning_ticket < cumulative_stake {
+                let mut key_array = [0u8; 32];
+                key_array.copy_from_slice(key_bytes);
+                return Some(VerifyingKey::from_bytes(&key_array).unwrap());
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

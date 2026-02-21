@@ -74,10 +74,10 @@ mod tests {
 
         // Uncomment after implementing the Storage trait
         // storage.save_block(&block).unwrap();
-        
+
         // let hash = block.hash();
         // let retrieved_bytes = storage.get_block(&hash).unwrap().unwrap();
-        
+
         // assert_eq!(retrieved_bytes, block.to_bytes());
     }
 }
