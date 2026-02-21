@@ -70,6 +70,12 @@ impl ToBytes for [u8; 32] {
     }
 }
 
+impl ToBytes for Vec<u8> {
+    fn to_bytes(&self) -> Vec<u8> {
+        self.clone()
+    }
+}
+
 impl ToBytes for VerifyingKey {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();

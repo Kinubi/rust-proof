@@ -1,5 +1,7 @@
 use crate::models::block::Block;
-use crate::traits::ToBytes;
+use crate::traits::{ ToBytes, Hashable };
+use std::fmt::Debug;
+use sled;
 
 /// The Storage trait defines the interface for persisting blockchain data.
 /// By using a trait, we can swap out the underlying database (e.g., Sled, RocksDB, or an in-memory mock for testing)
@@ -12,7 +14,24 @@ use crate::traits::ToBytes;
 // - `save_state_root(&self, height: u64, root: &[u8; 32]) -> Result<(), String>`
 // ============================================================================
 pub trait Storage: Send + Sync {
-    // YOUR CODE HERE
+    fn save_block(&self, block: &Block) -> Result<(), String>;
+    fn get_block(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String>;
+    fn save_state_root(&self, height: u64, root: &[u8; 32]) -> Result<(), String>;
+}
+
+impl Debug for dyn Storage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Storage")
+    }
+}
+
+impl Clone for Box<dyn Storage> {
+    fn clone(&self) -> Box<dyn Storage> {
+        // Since we can't clone a trait object directly, we can return a new instance of SledStorage.
+        // In a real implementation, you would want to have a more flexible way to clone the storage.
+        // For this example, we'll just create a new SledStorage with a default path.
+        Box::new(SledStorage::new("default_storage_path").unwrap())
+    }
 }
 
 /// A concrete implementation of the Storage trait using the `sled` embedded database.
@@ -21,7 +40,7 @@ pub trait Storage: Send + Sync {
 // It needs to hold a `sled::Db` instance.
 // ============================================================================
 pub struct SledStorage {
-    // YOUR CODE HERE
+    db: sled::Db,
 }
 
 impl SledStorage {
@@ -32,7 +51,10 @@ impl SledStorage {
     // Handle the Result (e.g., unwrap or return an error).
     // ====================================================================
     pub fn new(path: &str) -> Result<Self, String> {
-        unimplemented!("Implement SledStorage::new")
+        match sled::open(path) {
+            Ok(db) => Ok(SledStorage { db }),
+            Err(e) => Err(format!("Failed to open Sled database: {}", e)),
+        }
     }
 }
 
@@ -43,7 +65,30 @@ impl SledStorage {
 // 2. `get_block`: Call `self.db.get(hash)`. If it returns `Some(ivec)`, convert it to a `Vec<u8>`.
 // 3. `save_state_root`: Convert `height` to bytes for the key, and use `root` as the value.
 // ============================================================================
-// impl Storage for SledStorage { ... }
+
+impl Storage for SledStorage {
+    fn save_block(&self, block: &Block) -> Result<(), String> {
+        let key = block.hash();
+        let value = block.to_bytes();
+        match self.db.insert(key, value) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to save block: {}", e)),
+        }
+    }
+    fn get_block(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String> {
+        match self.db.get(hash) {
+            Ok(Some(ivec)) => Ok(Some(ivec.to_vec())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(format!("Failed to get block: {}", e)),
+        }
+    }
+    fn save_state_root(&self, height: u64, root: &[u8; 32]) -> Result<(), String> {
+        match self.db.insert(height.to_be_bytes(), root) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to save state root: {}", e)),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -72,12 +117,14 @@ mod tests {
             signature: None,
         };
 
+        let storage = SledStorage::new(db_path).unwrap();
+
         // Uncomment after implementing the Storage trait
-        // storage.save_block(&block).unwrap();
+        storage.save_block(&block).unwrap();
 
-        // let hash = block.hash();
-        // let retrieved_bytes = storage.get_block(&hash).unwrap().unwrap();
+        let hash = block.hash();
+        let retrieved_bytes = storage.get_block(&hash).unwrap().unwrap();
 
-        // assert_eq!(retrieved_bytes, block.to_bytes());
+        assert_eq!(retrieved_bytes, block.to_bytes());
     }
 }

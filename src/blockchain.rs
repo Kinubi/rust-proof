@@ -1,6 +1,7 @@
 use crate::models::block::Block;
 use crate::models::transaction::Transaction;
 use crate::state::State;
+use crate::storage::Storage;
 use crate::traits::Hashable;
 
 /// The Blockchain represents the entire ledger, including the chain of blocks,
@@ -17,6 +18,7 @@ pub struct Blockchain {
     chain: Vec<Block>,
     state: State,
     mempool: Vec<Transaction>,
+    storage: Box<dyn Storage>,
 }
 
 impl Blockchain {
@@ -28,7 +30,7 @@ impl Blockchain {
     // 2. Initialize the `State` and `mempool`.
     // 3. Return the `Blockchain` instance with the genesis block in the chain.
     // ====================================================================
-    pub fn new() -> Self {
+    pub fn new(storage: Box<dyn Storage>) -> Self {
         let genesis_block = Block {
             height: 0,
             previous_hash: [0u8; 32],
@@ -40,6 +42,7 @@ impl Blockchain {
             chain: vec![genesis_block],
             state: State::new(),
             mempool: vec![],
+            storage,
         }
     }
 
@@ -108,6 +111,17 @@ impl Blockchain {
             temp_state.apply_tx(tx);
         }
         self.state = temp_state;
+        if let Err(e) = self.storage.save_block(&block) {
+            return Err("Failed to save block to storage");
+        }
+        if
+            let Err(e) = self.storage.save_state_root(
+                block.height,
+                &self.state.compute_state_root()
+            )
+        {
+            return Err("Failed to save state root to storage");
+        }
         self.chain.push(block);
         self.mempool.clear();
         Ok(())
@@ -120,7 +134,7 @@ impl Blockchain {
 
 #[cfg(test)]
 mod tests {
-    use crate::models::transaction::TransactionData;
+    use crate::{ models::transaction::TransactionData, storage::SledStorage };
 
     use super::*;
     use ed25519_dalek::{ SigningKey, Signer };
@@ -128,12 +142,15 @@ mod tests {
 
     #[test]
     fn test_blockchain_add_transaction_and_block() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut csprng = OsRng;
         let validator_keypair = SigningKey::generate(&mut csprng);
         let sender_keypair = SigningKey::generate(&mut csprng);
         let receiver_keypair = SigningKey::generate(&mut csprng);
 
-        let mut blockchain = Blockchain::new();
+        let mut blockchain = Blockchain::new(
+            Box::new(SledStorage::new(temp_dir.path().to_str().unwrap()).unwrap())
+        );
         // Give sender some initial balance
         blockchain.state.balances.insert(*sender_keypair.verifying_key().as_bytes(), 100);
 
@@ -174,11 +191,14 @@ mod tests {
 
     #[test]
     fn test_enforce_consensus_validator() {
+        let temp_dir = tempfile::tempdir().unwrap();
         let mut csprng = OsRng;
         let validator1 = SigningKey::generate(&mut csprng);
         let validator2 = SigningKey::generate(&mut csprng);
 
-        let mut blockchain = Blockchain::new();
+        let mut blockchain = Blockchain::new(
+            Box::new(SledStorage::new(temp_dir.path().to_str().unwrap()).unwrap())
+        );
 
         // Add stakes to the state so we have a validator pool
         blockchain.state.stakes.insert(validator1.verifying_key().to_bytes(), 100);

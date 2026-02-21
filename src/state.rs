@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use ed25519_dalek::VerifyingKey;
 use crate::models::transaction::{ Transaction, TransactionData };
+use crate::traits::{ ToBytes, Hashable };
 
 /// The State represents the current balances and sequence numbers of all accounts.
 // ============================================================================
@@ -130,6 +131,40 @@ impl State {
             }
         }
         None
+    }
+
+    pub fn compute_state_root(&self) -> [u8; 32] {
+        let mut balances_vec: Vec<([u8; 32], u64)> = self.balances.clone().into_iter().collect();
+        balances_vec.sort_by_key(|(k, _)| *k);
+        let mut hashes = balances_vec
+            .into_iter()
+            .map(|(k, v)| {
+                let mut data: Vec<u8> = Vec::new();
+                let mut key_array = [0u8; 32];
+                data.extend_from_slice(&k);
+                data.extend_from_slice(&v.to_bytes());
+                key_array.copy_from_slice(&data.hash());
+                key_array
+            })
+            .collect::<Vec<[u8; 32]>>();
+        while hashes.len() > 1 {
+            let mut next_level: Vec<[u8; 32]> = Vec::new();
+            for i in (0..hashes.len()).step_by(2) {
+                let left = hashes[i];
+                let right = if i + 1 < hashes.len() { hashes[i + 1] } else { left };
+                let mut combined = Vec::new();
+                combined.extend_from_slice(&left);
+                combined.extend_from_slice(&right);
+                let mut hash_array = [0u8; 32];
+                hash_array.copy_from_slice(&combined.hash());
+                next_level.push(hash_array);
+            }
+            hashes = next_level;
+        }
+        hashes
+            .last()
+            .cloned()
+            .unwrap_or([0u8; 32]) // Placeholder: In a real implementation, this would be a Merkle root of the state.
     }
 }
 
@@ -282,5 +317,37 @@ mod tests {
         // let mut keys = vec![val1.verifying_key().to_bytes(), val2.verifying_key().to_bytes(), val3.verifying_key().to_bytes()];
         // keys.sort();
         // ... then you can calculate exactly who should win block 1, 2, 3, etc.
+    }
+
+    #[test]
+    fn test_compute_state_root() {
+        let mut state = State::new();
+        let root1 = state.compute_state_root();
+
+        let mut csprng = OsRng;
+        let key1 = SigningKey::generate(&mut csprng).verifying_key().to_bytes();
+        let key2 = SigningKey::generate(&mut csprng).verifying_key().to_bytes();
+
+        state.balances.insert(key1, 100);
+        let root2 = state.compute_state_root();
+
+        // This will fail until you finish implementing compute_state_root!
+        assert_ne!(root1, root2, "State root should change when state changes");
+
+        state.balances.insert(key2, 200);
+        let root3 = state.compute_state_root();
+        assert_ne!(root2, root3, "State root should change when state changes");
+
+        // Determinism check: insertion order shouldn't matter
+        let mut state_clone = State::new();
+        state_clone.balances.insert(key2, 200);
+        state_clone.balances.insert(key1, 100);
+        let root4 = state_clone.compute_state_root();
+
+        assert_eq!(
+            root3,
+            root4,
+            "State root should be deterministic regardless of insertion order"
+        );
     }
 }

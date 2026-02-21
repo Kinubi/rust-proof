@@ -10,7 +10,8 @@ use rust_proof::node::Node;
 #[tokio::main]
 async fn main() {
     println!("Starting rust-proof node...");
-    let (node, _sender) = Node::new();
+    let storage = Box::new(rust_proof::storage::SledStorage::new("data").unwrap());
+    let (node, _sender) = Node::new(storage);
     tokio::spawn(async move {
         node.run().await;
     });

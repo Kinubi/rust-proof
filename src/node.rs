@@ -2,6 +2,7 @@ use crate::blockchain::Blockchain;
 use crate::models::block::Block;
 use crate::models::transaction::{ Transaction, TransactionData };
 use tokio::sync::{ mpsc, oneshot };
+use crate::storage::{ Storage, SledStorage };
 
 /// Commands that can be sent to the Node to interact with the Blockchain state.
 // ============================================================================
@@ -45,7 +46,7 @@ pub struct Node {
 
 impl Node {
     /// Creates a new Node and returns it along with the sender half of the command channel.
-    pub fn new() -> (Self, mpsc::Sender<NodeCommand>) {
+    pub fn new(storage: Box<dyn Storage>) -> (Self, mpsc::Sender<NodeCommand>) {
         // ====================================================================
         // TODO 3: Implement `Node::new()`.
         // 1. Create an MPSC channel with a reasonable capacity (e.g., 100).
@@ -54,7 +55,7 @@ impl Node {
         // ====================================================================
         let (sender, receiver) = mpsc::channel(100);
         let node = Node {
-            blockchain: Blockchain::new(),
+            blockchain: Blockchain::new(storage),
             receiver,
         };
         (node, sender)
@@ -105,7 +106,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_node_commands() {
-        let (node, sender) = Node::new();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let storage = Box::new(SledStorage::new(temp_dir.path().to_str().unwrap()).unwrap());
+        let (node, sender) = Node::new(storage);
 
         // Spawn the node in a background task
         tokio::spawn(async move {
