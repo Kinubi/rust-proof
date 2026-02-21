@@ -7,13 +7,22 @@ pub struct Transaction {
     /// The public key of the sender.
     pub sender: VerifyingKey,
     /// The public key of the receiver.
-    pub receiver: VerifyingKey,
-    /// The amount being transferred.
-    pub amount: u64,
+    pub data: TransactionData,
     /// A unique number to prevent replay attacks (like a nonce).
     pub sequence: u64,
     /// The cryptographic signature proving the sender authorized this transaction.
     pub signature: Option<Signature>,
+}
+
+#[derive(Debug, Clone)]
+pub enum TransactionData {
+    Transfer {
+        receiver: VerifyingKey,
+        amount: u64,
+    },
+    Stake {
+        amount: u64,
+    },
 }
 
 // ============================================================================
@@ -28,8 +37,17 @@ impl ToBytes for Transaction {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.sender.to_bytes());
-        bytes.extend_from_slice(&self.receiver.to_bytes());
-        bytes.extend_from_slice(&self.amount.to_be_bytes());
+        match &self.data {
+            TransactionData::Transfer { receiver, amount } => {
+                bytes.extend_from_slice(&[0u8]); // 0 for Transfer
+                bytes.extend_from_slice(&receiver.to_bytes());
+                bytes.extend_from_slice(&amount.to_be_bytes());
+            }
+            TransactionData::Stake { amount } => {
+                bytes.extend_from_slice(&[1u8]); // 1 for Stake
+                bytes.extend_from_slice(&amount.to_be_bytes());
+            }
+        }
         bytes.extend_from_slice(&self.sequence.to_be_bytes());
         bytes
     }
@@ -67,8 +85,10 @@ mod tests {
 
         let mut tx = Transaction {
             sender: sender_keypair.verifying_key(),
-            receiver: receiver_keypair.verifying_key(),
-            amount: 100,
+            data: TransactionData::Transfer {
+                receiver: receiver_keypair.verifying_key(),
+                amount: 100,
+            },
             sequence: 1,
             signature: None,
         };

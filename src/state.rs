@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use ed25519_dalek::VerifyingKey;
-use crate::models::transaction::Transaction;
+use crate::models::transaction::{ Transaction, TransactionData };
 
 /// The State represents the current balances and sequence numbers of all accounts.
 // ============================================================================
@@ -14,6 +14,7 @@ use crate::models::transaction::Transaction;
 pub struct State {
     pub balances: HashMap<[u8; 32], u64>,
     pub nonces: HashMap<[u8; 32], u64>,
+    pub stakes: HashMap<[u8; 32], u64>,
 }
 
 impl State {
@@ -25,6 +26,7 @@ impl State {
         Self {
             balances: HashMap::new(),
             nonces: HashMap::new(),
+            stakes: HashMap::new(),
         }
     }
 
@@ -63,8 +65,17 @@ impl State {
         // ====================================================================
         let tx_valid = tx.is_valid();
         let sender_balance = self.get_balance(&tx.sender);
-        if tx.amount > sender_balance {
-            return false;
+        match &tx.data {
+            TransactionData::Transfer { amount, .. } => {
+                if sender_balance < *amount {
+                    return false;
+                }
+            }
+            TransactionData::Stake { amount } => {
+                if sender_balance < *amount {
+                    return false;
+                }
+            }
         }
         let sender_nonce = self.get_nonce(&tx.sender);
         if tx.sequence != sender_nonce {
@@ -86,12 +97,21 @@ impl State {
         let sender_key_bytes = tx.sender.to_bytes();
         let mut sender_key_array = [0u8; 32];
         sender_key_array.copy_from_slice(&sender_key_bytes);
-        let receiver_key_bytes = tx.receiver.to_bytes();
-        let mut receiver_key_array = [0u8; 32];
-        receiver_key_array.copy_from_slice(&receiver_key_bytes);
-        *self.balances.entry(sender_key_array).or_insert(0) -= tx.amount;
-        *self.balances.entry(receiver_key_array).or_insert(0) += tx.amount;
-        *self.nonces.entry(sender_key_array).or_insert(0) += 1;
+        match &tx.data {
+            TransactionData::Transfer { receiver, amount } => {
+                let receiver_key_bytes = receiver.to_bytes();
+                let mut receiver_key_array = [0u8; 32];
+                receiver_key_array.copy_from_slice(&receiver_key_bytes);
+                *self.balances.entry(sender_key_array).or_insert(0) -= *amount;
+                *self.balances.entry(receiver_key_array).or_insert(0) += *amount;
+                *self.nonces.entry(sender_key_array).or_insert(0) += 1;
+            }
+            TransactionData::Stake { amount } => {
+                *self.balances.entry(sender_key_array).or_insert(0) -= *amount;
+                *self.stakes.entry(sender_key_array).or_insert(0) += *amount;
+                *self.nonces.entry(sender_key_array).or_insert(0) += 1;
+            }
+        }
     }
 }
 
@@ -111,8 +131,10 @@ mod tests {
     ) -> Transaction {
         let mut tx = Transaction {
             sender: sender.verifying_key(),
-            receiver: *receiver,
-            amount,
+            data: TransactionData::Transfer {
+                receiver: *receiver,
+                amount,
+            },
             sequence,
             signature: None,
         };
@@ -197,9 +219,14 @@ mod tests {
         let mut tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 0);
 
         // Tamper with the transaction amount AFTER it was signed
-        tx.amount = 100;
+        if let TransactionData::Transfer { amount, .. } = &mut tx.data {
+            *amount = 100;
+        }
 
         // Uncomment after implementing is_valid_tx
-        // assert!(!state.is_valid_tx(&tx), "Transaction should be invalid due to tampered data/bad signature");
+        assert!(
+            !state.is_valid_tx(&tx),
+            "Transaction should be invalid due to tampered data/bad signature"
+        );
     }
 }

@@ -1,6 +1,6 @@
 use crate::blockchain::Blockchain;
 use crate::models::block::Block;
-use crate::models::transaction::Transaction;
+use crate::models::transaction::{ Transaction, TransactionData };
 use tokio::sync::{ mpsc, oneshot };
 
 /// Commands that can be sent to the Node to interact with the Blockchain state.
@@ -125,8 +125,10 @@ mod tests {
 
         let mut tx = Transaction {
             sender: sender_keypair.verifying_key(),
-            receiver: receiver_keypair.verifying_key(),
-            amount: 50,
+            data: TransactionData::Transfer {
+                receiver: receiver_keypair.verifying_key(),
+                amount: 50,
+            },
             sequence: 0,
             signature: None,
         };

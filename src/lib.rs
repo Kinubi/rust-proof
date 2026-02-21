@@ -3,3 +3,4 @@ pub mod models;
 pub mod state;
 pub mod blockchain;
 pub mod node;
+pub mod storage;

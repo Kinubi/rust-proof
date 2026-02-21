@@ -115,6 +115,8 @@ impl Blockchain {
 
 #[cfg(test)]
 mod tests {
+    use crate::models::transaction::TransactionData;
+
     use super::*;
     use ed25519_dalek::{ SigningKey, Signer };
     use rand::rngs::OsRng;
@@ -132,8 +134,10 @@ mod tests {
 
         let mut tx = Transaction {
             sender: sender_keypair.verifying_key(),
-            receiver: receiver_keypair.verifying_key(),
-            amount: 50,
+            data: TransactionData::Transfer {
+                receiver: receiver_keypair.verifying_key(),
+                amount: 50,
+            },
             sequence: 0,
             signature: None,
         };
