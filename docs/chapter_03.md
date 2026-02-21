@@ -40,10 +40,20 @@ We will create a new module: `node.rs`.
 4. Implement the `Node` struct. It should hold the `Receiver` for the `NodeCommand`s and the `Blockchain` itself.
 5. Implement a `run` method on the `Node` that loops forever, receiving commands and acting on them.
 
-### Hints for `NodeCommand` and `Node`:
-*   We will use `tokio` for our async runtime and channels. You'll need to add `tokio = { version = "1", features = ["full"] }` to your `Cargo.toml`.
-*   Use `tokio::sync::mpsc` for the main command channel.
-*   Use `tokio::sync::oneshot` for return channels.
-*   The `Node::run` method will be an `async fn`. It will use `while let Some(cmd) = self.receiver.recv().await { ... }` to process messages.
+### Hints for `NodeCommand` and `Node` (in `src/node.rs`):
+*   **`NodeCommand` enum:** Define variants for `AddTransaction`, `AddBlock`, `GetLatestBlock`, and `GetMempool`. Each variant needs to carry the necessary data and a `oneshot::Sender` to return the result. For example: `AddTransaction { tx: Transaction, responder: oneshot::Sender<Result<(), &'static str>> }`.
+*   **`Node` struct:** Needs `blockchain: Blockchain` and `receiver: mpsc::Receiver<NodeCommand>`.
+*   **`Node::new`:** 
+    1. Create an MPSC channel: `let (tx, rx) = mpsc::channel(100);`
+    2. Initialize a new `Blockchain`.
+    3. Return `(Node { blockchain, receiver: rx }, tx)`.
+*   **`Node::run`:** 
+    1. Use `while let Some(cmd) = self.receiver.recv().await { ... }` to process incoming commands.
+    2. Match on the `cmd` enum variants.
+    3. For `AddTransaction`, call `self.blockchain.add_transaction(tx)` and send the result back via `responder.send(...)`.
+    4. For `AddBlock`, call `self.blockchain.add_block(block)` and send the result back.
+    5. For `GetLatestBlock`, get the latest block (you might need to clone it) and send it back.
+    6. For `GetMempool`, clone the mempool and send it back.
+    *Note: `responder.send(...)` returns a Result. You can usually ignore the error if the receiver dropped the channel (e.g., `let _ = responder.send(...);`).*
 
 Go to `Cargo.toml` and add `tokio`. Then create `src/node.rs` and complete the `TODO`s. Run `cargo check` to verify your implementation.

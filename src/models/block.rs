@@ -1,6 +1,6 @@
-use crate::traits::{Hashable, ToBytes};
+use crate::traits::{ Hashable, ToBytes };
 use crate::models::transaction::Transaction;
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{ Signature, VerifyingKey };
 
 /// A block contains a list of transactions and a reference to the previous block.
 #[derive(Debug, Clone)]
@@ -25,8 +25,12 @@ pub struct Block {
 // ============================================================================
 impl ToBytes for Block {
     fn to_bytes(&self) -> Vec<u8> {
-        // YOUR CODE HERE
-        unimplemented!("Implement ToBytes for Block")
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.height.to_be_bytes());
+        bytes.extend_from_slice(&self.previous_hash);
+        bytes.extend_from_slice(&self.validator.to_bytes());
+        bytes.extend_from_slice(&self.transactions.to_bytes());
+        bytes
     }
 }
 
@@ -39,14 +43,19 @@ impl Block {
         // 2. Hash the block (using `self.hash()`).
         // 3. Use `self.validator.verify_strict(...)` to check the signature against the hash.
         // ====================================================================
-        unimplemented!("Implement signature verification")
+        if let Some(signature) = &self.signature {
+            let hash = self.hash();
+            self.validator.verify_strict(&hash[..], signature).is_ok()
+        } else {
+            return false;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{SigningKey, Signer};
+    use ed25519_dalek::{ SigningKey, Signer };
     use rand::rngs::OsRng;
 
     #[test]
@@ -64,9 +73,9 @@ mod tests {
 
         // Hash the block (without signature)
         let hash = block.hash();
-        
+
         // Sign the hash
-        let signature = validator_keypair.sign(&hash);
+        let signature = validator_keypair.sign(&hash[..]);
         block.signature = Some(signature);
 
         // Verify

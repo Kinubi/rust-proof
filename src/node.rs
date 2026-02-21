@@ -1,7 +1,7 @@
 use crate::blockchain::Blockchain;
 use crate::models::block::Block;
 use crate::models::transaction::Transaction;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{ mpsc, oneshot };
 
 /// Commands that can be sent to the Node to interact with the Blockchain state.
 // ============================================================================
@@ -61,7 +61,7 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{SigningKey, Signer};
+    use ed25519_dalek::{ SigningKey, Signer };
     use rand::rngs::OsRng;
     use crate::traits::Hashable;
 
@@ -75,7 +75,7 @@ mod tests {
         });
 
         // Test GetLatestBlock
-        let (resp_tx, resp_rx) = oneshot::channel();
+        // let (resp_tx, resp_rx) = oneshot::channel();
         // sender.send(NodeCommand::GetLatestBlock { responder: resp_tx }).await.unwrap();
         // let latest_block = resp_rx.await.unwrap();
         // assert_eq!(latest_block.height, 0); // Genesis block
@@ -95,10 +95,10 @@ mod tests {
         let hash = tx.hash();
         tx.signature = Some(sender_keypair.sign(&hash));
 
-        let (resp_tx, resp_rx) = oneshot::channel();
+        // let (resp_tx, resp_rx) = oneshot::channel();
         // We use a dummy command here just to make the test compile while you implement the enum
         // sender.send(NodeCommand::AddTransaction { tx: tx.clone(), responder: resp_tx }).await.unwrap();
-        
+
         // It should fail because the sender has no balance in the genesis state
         // let result = resp_rx.await.unwrap();
         // assert!(result.is_err());

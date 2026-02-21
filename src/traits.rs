@@ -1,4 +1,4 @@
-use sha2::{Digest, Sha256};
+use sha2::{ Digest, Sha256 };
 use ed25519_dalek::VerifyingKey;
 
 /// A trait for converting a type into a flat array of bytes.
@@ -20,8 +20,8 @@ pub trait Hashable {
 // ============================================================================
 impl ToBytes for u64 {
     fn to_bytes(&self) -> Vec<u8> {
-        // YOUR CODE HERE
-        unimplemented!("Implement ToBytes for u64")
+        let bytes = self.to_be_bytes();
+        bytes.to_vec()
     }
 }
 
@@ -33,8 +33,11 @@ impl ToBytes for u64 {
 // ============================================================================
 impl ToBytes for String {
     fn to_bytes(&self) -> Vec<u8> {
-        // YOUR CODE HERE
-        unimplemented!("Implement ToBytes for String")
+        let mut bytes = Vec::new();
+        let len = self.len() as u64;
+        bytes.extend_from_slice(&len.to_be_bytes());
+        bytes.extend_from_slice(self.as_bytes());
+        bytes
     }
 }
 
@@ -46,8 +49,13 @@ impl ToBytes for String {
 // ============================================================================
 impl<T: ToBytes> ToBytes for Vec<T> {
     fn to_bytes(&self) -> Vec<u8> {
-        // YOUR CODE HERE
-        unimplemented!("Implement ToBytes for Vec<T>")
+        let mut bytes = Vec::new();
+        let len = self.len() as u64;
+        bytes.extend_from_slice(&len.to_be_bytes());
+        for item in self.iter() {
+            bytes.extend_from_slice(&item.to_bytes());
+        }
+        bytes
     }
 }
 
@@ -58,15 +66,15 @@ impl<T: ToBytes> ToBytes for Vec<T> {
 // ============================================================================
 impl ToBytes for [u8; 32] {
     fn to_bytes(&self) -> Vec<u8> {
-        // YOUR CODE HERE
-        unimplemented!("Implement ToBytes for [u8; 32]")
+        self.to_vec()
     }
 }
 
 impl ToBytes for VerifyingKey {
     fn to_bytes(&self) -> Vec<u8> {
-        // YOUR CODE HERE
-        unimplemented!("Implement ToBytes for VerifyingKey")
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.to_bytes());
+        bytes
     }
 }
 
@@ -80,8 +88,13 @@ impl ToBytes for VerifyingKey {
 // ============================================================================
 impl<T: ToBytes> Hashable for T {
     fn hash(&self) -> [u8; 32] {
-        // YOUR CODE HERE
-        unimplemented!("Implement Hashable for T: ToBytes")
+        let bytes = self.to_bytes();
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let result = hasher.finalize();
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&result);
+        hash
     }
 }
 

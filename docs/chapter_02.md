@@ -29,16 +29,28 @@ We will create two new modules: `state.rs` and `blockchain.rs`.
 5. Implement the `Blockchain` struct. It will hold the chain of blocks, the current state, and the mempool.
 6. Implement the logic to add a new block to the chain, validating it against the current state.
 
-### Hints for `State`:
-* Use a `HashMap` to store account balances. The key should be the `VerifyingKey` (as bytes, since `VerifyingKey` doesn't implement `Hash` directly, or you can use a wrapper/array). Actually, `[u8; 32]` is a great key for a `HashMap`.
-* You'll need another `HashMap` for sequence numbers.
-* **Borrow Checker:** When implementing `apply_tx`, you'll need to mutate the state. Pay attention to how you borrow `self` (`&mut self`) and how you access the `HashMap` entries. The `entry` API is very useful here: `self.balances.entry(key).or_insert(0)`.
+### Hints for `State` (in `src/state.rs`):
+* **`State` struct:** Use a `HashMap<[u8; 32], u64>` for `balances` and another for `nonces`. The key is the byte representation of the `VerifyingKey`.
+* **`get_balance` & `get_nonce`:** Convert the `account` to bytes (`account.to_bytes()`) and use `.get(&bytes).copied().unwrap_or(0)` to return the value or 0 if it doesn't exist.
+* **`is_valid_tx`:** 
+  1. Check `tx.is_valid()` (cryptographic signature).
+  2. Check if `self.get_balance(&tx.sender) >= tx.amount`.
+  3. Check if `self.get_nonce(&tx.sender) == tx.sequence`.
+* **`apply_tx`:** 
+  1. Subtract `tx.amount` from the sender's balance: `*self.balances.entry(sender_bytes).or_insert(0) -= tx.amount;`
+  2. Add `tx.amount` to the receiver's balance: `*self.balances.entry(receiver_bytes).or_insert(0) += tx.amount;`
+  3. Increment the sender's nonce: `*self.nonces.entry(sender_bytes).or_insert(0) += 1;`
 
-### Hints for `Blockchain`:
-* The `Blockchain` needs a `Vec<Block>` for the chain.
-* It needs a `State` instance.
-* It needs a `Vec<Transaction>` for the mempool.
-* **Borrow Checker & Lifetimes:** When adding a block, you need to validate its transactions against the state. You might need to temporarily apply them to a clone of the state to see if they are valid together, or apply them and rollback if one fails. For this exercise, a simpler approach is to clone the state, apply the transactions to the clone, and if successful, replace the actual state with the clone. This avoids complex rollback logic but requires understanding how to clone and replace data.
-* **Error Handling:** The `add_transaction` and `add_block` methods return `Result<(), &'static str>`. This is a simple way to handle errors in Rust. If validation fails, return `Err("Reason")`. If it succeeds, return `Ok(())`.
+### Hints for `Blockchain` (in `src/blockchain.rs`):
+* **`Blockchain` struct:** Needs `chain: Vec<Block>`, `state: State`, and `mempool: Vec<Transaction>`.
+* **`new`:** Create a genesis block (height 0, empty previous hash, empty transactions, dummy validator key). Initialize `State` and `mempool`. Return the `Blockchain` with the genesis block in the chain.
+* **`add_transaction`:** Call `self.state.is_valid_tx(&tx)`. If true, push to `self.mempool` and return `Ok(())`. Else, return `Err("Invalid transaction")`.
+* **`add_block`:** 
+  1. Check `block.is_valid()`.
+  2. Check `block.height == self.get_latest_block().height + 1`.
+  3. Check `block.previous_hash == self.get_latest_block().hash()`.
+  4. Create a temporary state clone: `let mut temp_state = self.state.clone();`
+  5. Iterate over `block.transactions`. If `!temp_state.is_valid_tx(tx)`, return `Err("Invalid transaction in block")`. Otherwise, `temp_state.apply_tx(tx)`.
+  6. If all valid, replace state (`self.state = temp_state`), push block to chain, and clear mempool (`self.mempool.clear()`). Return `Ok(())`.
 
 Go to `src/state.rs` and `src/blockchain.rs` and complete the `TODO`s. Run `cargo test` to verify your implementation.

@@ -52,9 +52,18 @@ We need a way to convert any struct into bytes, and then hash those bytes.
   // result is a GenericArray, you can convert it to [u8; 32] using .into()
   ```
 
-### Hints for `Transaction` and `Block` (in `src/models/`):
-* When implementing `ToBytes` for these structs, you'll need to chain together the bytes of their individual fields.
-* **Borrowing:** Pay attention to whether you are passing ownership or borrowing when calling `.to_bytes()` on the fields. Since `to_bytes(&self)` takes a reference, you can usually just pass `&self.field`.
-* **Signatures:** Remember the domain knowledge: the signature is created *from* the hash of the data. Therefore, when converting a `Transaction` or `Block` to bytes for hashing, you **must not** include the signature field itself, otherwise you create a circular dependency.
+### Hints for `Transaction` (in `src/models/transaction.rs`):
+* **`ToBytes`:** Create a mutable `Vec<u8>`. Call `.to_bytes()` on `sender`, `receiver`, `amount`, and `sequence`, and extend your vector with these bytes. **Do not** include the `signature` field, as the signature is generated *from* this hash.
+* **`is_valid`:** 
+  1. Extract the signature. If `self.signature` is `None`, return `false`.
+  2. Get the hash of the transaction by calling `self.hash()`. (This works because `Transaction` implements `ToBytes`, and we wrote a blanket impl for `Hashable`!).
+  3. Use the `ed25519_dalek` API to verify: `self.sender.verify_strict(&hash, &sig).is_ok()`.
+
+### Hints for `Block` (in `src/models/block.rs`):
+* **`ToBytes`:** Similar to `Transaction`, create a `Vec<u8>` and extend it with the bytes of `height`, `previous_hash`, `validator`, and `transactions`. Again, omit the `signature`.
+* **`is_valid`:** 
+  1. Extract the signature. If `self.signature` is `None`, return `false`.
+  2. Hash the block using `self.hash()`.
+  3. Verify the signature using the validator's public key: `self.validator.verify_strict(&hash, &sig).is_ok()`.
 
 Go to `src/traits.rs`, `src/models/transaction.rs`, and `src/models/block.rs` and complete the `TODO`s. Run `cargo test` to verify your implementation.

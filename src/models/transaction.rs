@@ -1,5 +1,5 @@
-use crate::traits::{Hashable, ToBytes};
-use ed25519_dalek::{Signature, VerifyingKey};
+use crate::traits::{ Hashable, ToBytes };
+use ed25519_dalek::{ Signature, VerifyingKey };
 
 /// A transaction represents a transfer of value from one account to another.
 #[derive(Debug, Clone)]
@@ -26,8 +26,12 @@ pub struct Transaction {
 // ============================================================================
 impl ToBytes for Transaction {
     fn to_bytes(&self) -> Vec<u8> {
-        // YOUR CODE HERE
-        unimplemented!("Implement ToBytes for Transaction")
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.sender.to_bytes());
+        bytes.extend_from_slice(&self.receiver.to_bytes());
+        bytes.extend_from_slice(&self.amount.to_be_bytes());
+        bytes.extend_from_slice(&self.sequence.to_be_bytes());
+        bytes
     }
 }
 
@@ -40,14 +44,19 @@ impl Transaction {
         // 2. Hash the transaction (using `self.hash()`).
         // 3. Use `self.sender.verify_strict(...)` to check the signature against the hash.
         // ====================================================================
-        unimplemented!("Implement signature verification")
+        if let Some(signature) = &self.signature {
+            let hash = self.hash();
+            self.sender.verify_strict(&hash[..], signature).is_ok()
+        } else {
+            return false;
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{SigningKey, Signer};
+    use ed25519_dalek::{ SigningKey, Signer };
     use rand::rngs::OsRng;
 
     #[test]
@@ -66,9 +75,9 @@ mod tests {
 
         // Hash the transaction (without signature)
         let hash = tx.hash();
-        
+
         // Sign the hash
-        let signature = sender_keypair.sign(&hash);
+        let signature = sender_keypair.sign(&hash[..]);
         tx.signature = Some(signature);
 
         // Verify
