@@ -82,15 +82,6 @@ impl Transaction {
     }
 }
 
-// ============================================================================
-// TODO 7: Implement Custom Ordering for `Transaction`.
-// To use `Transaction` in a `BTreeSet` (for the mempool), it needs to be sortable.
-// 1. Implement `PartialEq` and `Eq` (you can just compare their hashes).
-// 2. Implement `PartialOrd` and `Ord`.
-//    - In `Ord::cmp`, sort by `fee` DESCENDING (highest fee first).
-//    - If fees are equal, use the transaction hash as a tie-breaker to ensure
-//      deterministic ordering.
-// ============================================================================
 impl PartialEq for Transaction {
     fn eq(&self, other: &Self) -> bool {
         self.hash() == other.hash()

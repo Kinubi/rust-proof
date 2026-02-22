@@ -24,7 +24,7 @@ When a validator submits an `Unstake` transaction, their funds enter an **Unbond
 
 ## Your Tasks
 
-I have placed `TODO: Chapter 7` comments in the codebase to guide you. Here is the roadmap:
+Here is the roadmap:
 
 ### Step 1: Add Time to Blocks
 1. Open `src/models/block.rs`.
@@ -61,9 +61,47 @@ I have placed `TODO: Chapter 7` comments in the codebase to guide you. Here is t
 ### Step 5: Update Consensus (Optional / Advanced)
 Update `Blockchain::add_block` to enforce that the block's `slot` is strictly greater than the `latest_block.slot`. 
 
-### Step 6: Fork Choice Rule (Advanced)
-In a real network, you might receive a block that doesn't build on your `latest_block`, but instead builds on an older block (a fork). 
-1. Update `Blockchain` to store a tree of blocks rather than a single `Vec<Block>`.
-2. Implement a "Heaviest Chain" rule: when multiple valid chains exist, the node should consider the chain with the most total stake behind its blocks as the canonical chain.
+### Step 6: Fork Choice Rule & State Reorganization (The State Root Route)
+In a real network, you might receive a block that doesn't build on your `latest_block`, but instead builds on an older block (a fork). To handle this, we need a **Fork Choice Rule** (Heaviest Chain) and a way to manage **State Reorganizations**.
+
+Because applying transactions mutates the `State`, switching to a different fork means we need the exact `State` as it existed at that fork's tip. Instead of recalculating from genesis, we will use the **State Root Route**: saving snapshots of the state.
+
+#### 6.1: Update the Block Structure
+1. Open `src/models/block.rs`.
+2. Add `pub state_root: [u8; 32]` to the `Block` struct. This represents the hash of the state *after* this block's transactions are applied.
+3. Update `ToBytes` to include `state_root`.
+4. You already have `BlockNode`, which is perfect for building the tree:
+   ```rust
+   pub struct BlockNode {
+       pub block: Block,
+       pub children: Vec<[u8; 32]>, // Hashes of child blocks
+   }
+   ```
+
+#### 6.2: Update Storage to Handle State Snapshots
+1. Open `src/storage.rs`.
+2. Add methods to your `Storage` trait to save and load full `State` snapshots:
+   - `fn save_state_snapshot(&self, block_hash: &[u8; 32], state: &State) -> Result<(), String>;`
+   - `fn get_state_snapshot(&self, block_hash: &[u8; 32]) -> Result<Option<State>, String>;`
+3. Implement these in `SledStorage`. *(Hint: You will need to implement `ToBytes` / `FromBytes` for `State`, or use a serialization crate like `serde` or `bincode` to easily convert the `State` struct to bytes for Sled)*.
+
+#### 6.3: Refactor Blockchain to use a Block Tree
+1. Open `src/blockchain.rs`.
+2. Change `chain: Vec<Block>` to `chain: HashMap<[u8; 32], BlockNode>`.
+3. Add a `pub head_hash: [u8; 32]` field to track the current tip of the heaviest chain.
+4. Update `Blockchain::new()` to insert the genesis block into the `HashMap`, save its initial state snapshot to storage, and set `head_hash`.
+
+#### 6.4: The New `add_block` Algorithm
+When a new block arrives, you can no longer assume it builds on `self.state`. It might build on an older block!
+Update `add_block` to follow this logic:
+1. **Find Parent:** Look up the block's `previous_hash` in the `chain` HashMap. If it doesn't exist, reject the block (or queue it as an orphan).
+2. **Load Parent State:** Fetch the parent block's `State` snapshot from `Storage`.
+3. **Apply & Verify:** Clone the parent state. Apply the new block's transactions to this cloned state.
+4. **State Root Check:** Compute the new state root (`cloned_state.compute_state_root()`). Verify it matches the `state_root` declared in the block.
+5. **Save:** Save the new block to the `chain` HashMap (and add its hash to its parent's `children` list). Save the `cloned_state` snapshot to `Storage` keyed by the new block's hash.
+6. **Fork Choice (Heaviest Chain):** 
+   - Calculate the "weight" of the new block's chain. (Weight = sum of the stakes of the validators who proposed blocks from the fork point up to this new block).
+   - Calculate the "weight" of the current `head_hash` chain.
+   - If the new chain is heavier, update `self.head_hash = new_block.hash()` and update `self.state = cloned_state`. This is a **State Reorg**!
 
 Good luck! This chapter introduces complex state transitions and cryptographic proofs of misbehavior.

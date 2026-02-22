@@ -1,5 +1,6 @@
 use crate::models::block::Block;
-use crate::traits::{ ToBytes, Hashable };
+use crate::state::State;
+use crate::traits::{ ToBytes, FromBytes, Hashable };
 use std::fmt::Debug;
 use sled;
 
@@ -10,6 +11,8 @@ pub trait Storage: Send + Sync {
     fn save_block(&self, block: &Block) -> Result<(), String>;
     fn get_block(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String>;
     fn save_state_root(&self, height: u64, root: &[u8; 32]) -> Result<(), String>;
+    fn save_state_snapshot(&self, block_hash: &[u8; 32], state: &State) -> Result<(), String>;
+    fn get_state_snapshot(&self, block_hash: &[u8; 32]) -> Result<Option<State>, String>;
 }
 
 impl Debug for dyn Storage {
@@ -64,6 +67,26 @@ impl Storage for SledStorage {
             Err(e) => Err(format!("Failed to save state root: {}", e)),
         }
     }
+    fn save_state_snapshot(&self, block_hash: &[u8; 32], state: &State) -> Result<(), String> {
+        let value = state.to_bytes();
+        match self.db.insert(block_hash, value) {
+            Ok(_) => Ok(()),
+            Err(e) => Err(format!("Failed to save state snapshot: {}", e)),
+        }
+    }
+    fn get_state_snapshot(&self, block_hash: &[u8; 32]) -> Result<Option<State>, String> {
+        match self.db.get(block_hash) {
+            Ok(Some(ivec)) => {
+                if let Ok(state) = State::from_bytes(&ivec) {
+                    Ok(Some(state))
+                } else {
+                    Err("Failed to deserialize state snapshot".to_string())
+                }
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(format!("Failed to get state snapshot: {}", e)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -93,6 +116,7 @@ mod tests {
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
+            state_root: [0; 32],
         };
 
         let storage = SledStorage::new(db_path).unwrap();

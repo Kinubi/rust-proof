@@ -20,6 +20,8 @@ pub struct Block {
     pub signature: Option<Signature>,
     /// Slash transactions included in this block (if any).
     pub slash_proofs: Vec<SlashProof>,
+    /// The state root after applying this block's transactions.
+    pub state_root: [u8; 32],
 }
 
 impl ToBytes for Block {
@@ -31,6 +33,7 @@ impl ToBytes for Block {
         bytes.extend_from_slice(&self.validator.to_bytes());
         bytes.extend_from_slice(&self.transactions.to_bytes());
         bytes.extend_from_slice(&self.slash_proofs.to_bytes());
+        bytes.extend_from_slice(&self.state_root);
         bytes
     }
 }
@@ -44,6 +47,22 @@ impl Block {
         } else {
             return false;
         }
+    }
+}
+#[derive(Debug, Clone)]
+pub struct BlockNode {
+    pub block: Block,
+    pub children: Vec<[u8; 32]>, // Hashes of child blocks
+}
+
+impl ToBytes for BlockNode {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.block.to_bytes());
+        for child in &self.children {
+            bytes.extend_from_slice(child);
+        }
+        bytes
     }
 }
 
@@ -66,6 +85,7 @@ mod tests {
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
+            state_root: [0; 32],
         };
 
         // Hash the block (without signature)

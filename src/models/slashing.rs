@@ -16,15 +16,6 @@ impl SlashProof {
     /// A valid proof must show that the same validator signed two different blocks
     /// for the exact same slot.
     pub fn is_valid(&self) -> bool {
-        // ====================================================================
-        // TODO: Chapter 7 - Implement SlashProof validation.
-        // 1. Check that block_a.slot == block_b.slot
-        // 2. Check that block_a.hash() != block_b.hash()
-        // 3. Check that block_a.validator == self.validator
-        // 4. Check that block_b.validator == self.validator
-        // 5. Check that block_a.is_valid() is true
-        // 6. Check that block_b.is_valid() is true
-        // ====================================================================
         if self.block_a.slot != self.block_b.slot {
             println!("Invalid proof: blocks are from different slots");
             return false;
@@ -81,6 +72,7 @@ mod tests {
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
+            state_root: [0u8; 32],
         };
         let mut block_b = Block {
             height: 1,
@@ -90,6 +82,7 @@ mod tests {
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
+            state_root: [0u8; 32],
         };
         // Hash the block (without signature)
         let hash_a = block_a.hash();

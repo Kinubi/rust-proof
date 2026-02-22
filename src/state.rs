@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use ed25519_dalek::VerifyingKey;
 use crate::models::slashing::SlashProof;
 use crate::models::transaction::{ Transaction, TransactionData, UnstakeRequest };
-use crate::traits::{ ToBytes, Hashable };
+use crate::traits::{ ToBytes, FromBytes, Hashable };
 
 pub const EPOCH_LENGTH: u64 = 32; // Example: 32 slots per epoch
 pub const UNSTAKE_LOCK_EPOCHS: u64 = 2; // Example: unstaked funds unlock after 2 epochs
@@ -183,6 +183,97 @@ impl State {
         } else {
             Err("Invalid slash proof")
         }
+    }
+}
+
+impl ToBytes for State {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+
+        // Helper to write a map of [u8; 32] -> u64
+        let write_u64_map = |map: &HashMap<[u8; 32], u64>, out: &mut Vec<u8>| {
+            out.extend_from_slice(&(map.len() as u64).to_be_bytes());
+            for (k, v) in map {
+                out.extend_from_slice(k);
+                out.extend_from_slice(&v.to_be_bytes());
+            }
+        };
+
+        write_u64_map(&self.balances, &mut bytes);
+        write_u64_map(&self.nonces, &mut bytes);
+        write_u64_map(&self.stakes, &mut bytes);
+
+        // Write unstaking map
+        bytes.extend_from_slice(&(self.unstaking.len() as u64).to_be_bytes());
+        for (account, requests) in &self.unstaking {
+            bytes.extend_from_slice(account);
+            bytes.extend_from_slice(&(requests.len() as u64).to_be_bytes());
+            for req in requests {
+                bytes.extend_from_slice(&req.amount.to_be_bytes());
+                bytes.extend_from_slice(&req.unlock_slot.to_be_bytes());
+            }
+        }
+
+        bytes
+    }
+}
+
+impl FromBytes for State {
+    fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        let mut state = State::new();
+        let mut i = 0;
+
+        fn read_u64(bytes: &[u8], i: &mut usize) -> Result<u64, &'static str> {
+            if *i + 8 > bytes.len() {
+                return Err("Unexpected EOF reading u64");
+            }
+            let val = u64::from_be_bytes(bytes[*i..*i + 8].try_into().unwrap());
+            *i += 8;
+            Ok(val)
+        }
+
+        fn read_key(bytes: &[u8], i: &mut usize) -> Result<[u8; 32], &'static str> {
+            if *i + 32 > bytes.len() {
+                return Err("Unexpected EOF reading key");
+            }
+            let mut key = [0u8; 32];
+            key.copy_from_slice(&bytes[*i..*i + 32]);
+            *i += 32;
+            Ok(key)
+        }
+
+        fn read_u64_map(
+            bytes: &[u8],
+            i: &mut usize,
+            map: &mut HashMap<[u8; 32], u64>
+        ) -> Result<(), &'static str> {
+            let len = read_u64(bytes, i)?;
+            for _ in 0..len {
+                let k = read_key(bytes, i)?;
+                let v = read_u64(bytes, i)?;
+                map.insert(k, v);
+            }
+            Ok(())
+        }
+
+        read_u64_map(bytes, &mut i, &mut state.balances)?;
+        read_u64_map(bytes, &mut i, &mut state.nonces)?;
+        read_u64_map(bytes, &mut i, &mut state.stakes)?;
+
+        let unstaking_len = read_u64(bytes, &mut i)?;
+        for _ in 0..unstaking_len {
+            let k = read_key(bytes, &mut i)?;
+            let req_len = read_u64(bytes, &mut i)?;
+            let mut requests = Vec::with_capacity(req_len as usize);
+            for _ in 0..req_len {
+                let amount = read_u64(bytes, &mut i)?;
+                let unlock_slot = read_u64(bytes, &mut i)?;
+                requests.push(UnstakeRequest { amount, unlock_slot });
+            }
+            state.unstaking.insert(k, requests);
+        }
+
+        Ok(state)
     }
 }
 

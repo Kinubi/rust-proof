@@ -1,12 +1,13 @@
 use crate::models::block::Block;
 use crate::models::transaction::Transaction;
+use serde::{Serialize, Deserialize};
 
 // ============================================================================
 // TODO: Chapter 8 - Define Network Messages
-// 1. Add serde derives (Serialize, Deserialize) once added to Cargo.toml
-// 2. Define an enum `NetworkMessage` with variants for:
-//    - Handshake { height: u64, genesis_hash: [u8; 32] }
-//    - Transaction(Transaction)
-//    - Block(Block)
-//    - GetBlocks { from_height: u64, to_height: u64 }
+// 1. Define an enum `NetworkMessage` that implements `Serialize` and `Deserialize`.
+// 2. Add variants for:
+//    - `NewTransaction(Transaction)`
+//    - `NewBlock(Block)`
+//    - `SyncRequest { from_height: u64, to_height: u64 }`
+//    - `SyncResponse { blocks: Vec<Block> }`
 // ============================================================================

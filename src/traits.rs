@@ -8,6 +8,12 @@ pub trait ToBytes {
     fn to_bytes(&self) -> Vec<u8>;
 }
 
+/// A trait for converting a flat array of bytes back into a type.
+pub trait FromBytes: Sized {
+    /// Converts a `&[u8]` back into the type.
+    fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str>;
+}
+
 /// A trait for hashing a type.
 pub trait Hashable {
     /// Returns the SHA-256 hash of the type as a 32-byte array.

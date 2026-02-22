@@ -4,15 +4,14 @@ use tokio::sync::mpsc;
 
 // ============================================================================
 // TODO: Chapter 8 - Define NetworkBehaviour
-// 1. Add libp2p to Cargo.toml with features: tokio, gossipsub, kad, tcp, noise, yamux
-// 2. Define a custom `NetworkBehaviour` struct using #[derive(NetworkBehaviour)]
+// 1. Define a custom `NetworkBehaviour` struct using #[derive(NetworkBehaviour)]
 //    that combines gossipsub, kademlia, and request_response.
 // ============================================================================
 
 /// Manages P2P network connections and message broadcasting using libp2p.
 pub struct NetworkManager {
     // TODO: Chapter 8 - Add the libp2p Swarm here
-    // swarm: Swarm<MyCustomBehaviour>,
+    // swarm: Swarm<AppBehaviour>,
     
     /// Channel to send commands back to the central Node.
     node_sender: mpsc::Sender<NodeCommand>,
@@ -32,18 +31,28 @@ impl NetworkManager {
         // 1. Loop over `swarm.select_next_some().await`.
         // 2. Handle Gossipsub events (deserialize messages and send to Node).
         // 3. Handle RequestResponse events (fetch blocks and send back).
+        // 4. Handle Kademlia events (add discovered peers to Gossipsub).
         // ====================================================================
         println!("NetworkManager started");
     }
 
-    /// Broadcasts a message to the network via Gossipsub.
-    // pub async fn broadcast(&mut self, topic: &str, message: NetworkMessage) {
-    pub async fn broadcast(&mut self) {
+    /// Broadcasts a transaction to the network via Gossipsub.
+    pub async fn broadcast_transaction(&mut self) {
         // ====================================================================
-        // TODO: Chapter 8 - Implement broadcast
-        // 1. Serialize the message.
-        // 2. Publish the serialized bytes to the given Gossipsub topic.
+        // TODO: Chapter 8 - Implement broadcast_transaction
+        // 1. Serialize the transaction.
+        // 2. Publish the serialized bytes to the "transactions" Gossipsub topic.
         // ====================================================================
-        println!("Broadcasting message to network");
+        println!("Broadcasting transaction to network");
+    }
+
+    /// Broadcasts a block to the network via Gossipsub.
+    pub async fn broadcast_block(&mut self) {
+        // ====================================================================
+        // TODO: Chapter 8 - Implement broadcast_block
+        // 1. Serialize the block.
+        // 2. Publish the serialized bytes to the "blocks" Gossipsub topic.
+        // ====================================================================
+        println!("Broadcasting block to network");
     }
 }

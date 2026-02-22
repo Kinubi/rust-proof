@@ -21,35 +21,61 @@ When a new node joins, it needs to download the history of the blockchain. We wi
 
 ## Your Tasks
 
-### Step 1: Define Network Messages
+This is a massive chapter. `libp2p` is powerful but complex. We will break it down into manageable pieces.
+
+### Step 1: Add Dependencies
+1. Open `Cargo.toml`.
+2. Add the following dependencies:
+   ```toml
+   libp2p = { version = "0.53", features = ["tokio", "gossipsub", "kad", "tcp", "noise", "yamux", "macros", "request-response"] }
+   serde = { version = "1.0", features = ["derive"] }
+   bincode = "1.3"
+   ```
+3. You will also need to derive `Serialize` and `Deserialize` on your core models (`Block`, `Transaction`, `TransactionData`, `SlashProof`, `UnstakeRequest`).
+
+### Step 2: Define Network Messages
 1. Open `src/network/message.rs`.
-2. Define an enum `NetworkMessage` that implements `Serialize` and `Deserialize` (you will need to add `serde` and `serde_json` or `bincode` to your `Cargo.toml`).
+2. Define an enum `NetworkMessage` that implements `Serialize` and `Deserialize`.
 3. Add variants for:
-   - `Transaction(crate::models::transaction::Transaction)`
-   - `Block(crate::models::block::Block)`
-   - `GetBlocks { from_height: u64, to_height: u64 }` (For the Request/Response protocol)
+   - `NewTransaction(crate::models::transaction::Transaction)`
+   - `NewBlock(crate::models::block::Block)`
+   - `SyncRequest { from_height: u64, to_height: u64 }`
+   - `SyncResponse { blocks: Vec<crate::models::block::Block> }`
 
-### Step 2: Create the libp2p Network Behavior
+### Step 3: Create the libp2p Network Behavior
 1. Open `src/network/manager.rs`.
-2. You will need to add `libp2p` to your `Cargo.toml` with features like `tokio`, `gossipsub`, `kad`, `tcp`, `noise`, and `yamux`.
-3. Define a custom `NetworkBehaviour` struct (using the `#[derive(NetworkBehaviour)]` macro) that combines:
-   - `gossipsub::Behaviour` (for broadcasting blocks and txs)
-   - `kad::Behaviour` (for peer discovery)
-   - `request_response::Behaviour` (for syncing blocks)
+2. Define a custom `NetworkBehaviour` struct using the `#[derive(NetworkBehaviour)]` macro. This struct combines the different protocols we want to use:
+   ```rust
+   #[derive(NetworkBehaviour)]
+   pub struct AppBehaviour {
+       pub gossipsub: gossipsub::Behaviour,
+       pub kademlia: kad::Behaviour<kad::store::MemoryStore>,
+       pub request_response: request_response::Behaviour<SyncCodec>,
+   }
+   ```
+   *(Note: You will need to define a simple `SyncCodec` for the request/response protocol, or just use a basic byte-oriented codec provided by libp2p and serialize your `NetworkMessage` into it).*
 
-### Step 3: Create the Network Manager
-1. Define a `NetworkManager` struct that holds the `libp2p::Swarm` and a channel to communicate with the central `Node`.
-2. Implement a method `pub async fn start(&mut self)` that drives the `Swarm` by calling `swarm.select_next_some().await` in a loop.
+### Step 4: Create the Network Manager
+1. Define a `NetworkManager` struct that holds the `libp2p::Swarm<AppBehaviour>` and a channel (`mpsc::Sender<NodeCommand>`) to communicate with the central `Node`.
+2. Implement a method `pub async fn start(&mut self)` that drives the `Swarm` by calling `self.swarm.select_next_some().await` in a loop.
 3. Handle `SwarmEvent`s:
-   - When a `GossipsubEvent::Message` is received, deserialize it into a `NetworkMessage` (Block or Transaction) and send it to the `Node`.
-   - When a `RequestResponseEvent::Message` is received (a `GetBlocks` request), fetch the blocks from the `Node` and send them back.
+   - **`GossipsubEvent::Message`**: Deserialize the payload into a `NetworkMessage`. If it's a `NewBlock`, send a `NodeCommand::AddBlock` to the Node. If it's a `NewTransaction`, send a `NodeCommand::AddTransaction`.
+   - **`RequestResponseEvent::Message::Request`**: A peer is asking for blocks. Send a command to the Node to fetch those blocks, then send them back via `self.swarm.behaviour_mut().request_response.send_response(...)`.
+   - **`RequestResponseEvent::Message::Response`**: You received blocks you asked for. Send them to the Node to be processed.
 
-### Step 4: Broadcast Messages
-1. Add a method `pub async fn broadcast(&mut self, topic: &str, message: NetworkMessage)` to `NetworkManager` to publish a message to a Gossipsub topic.
-2. Update the `Node` to notify the `NetworkManager` when a new transaction is added to the mempool or a new block is forged, so it can be published to the network.
+### Step 5: Peer Discovery (Kademlia)
+1. In your `NetworkManager::start` loop, handle `KademliaEvent`s.
+2. When you discover a new peer (e.g., via `RoutingUpdated`), add them to Gossipsub: `self.swarm.behaviour_mut().gossipsub.add_explicit_peer(&peer_id)`.
+3. Periodically (e.g., every 5 minutes using `tokio::time::interval`), trigger a random Kademlia lookup to find new peers: `self.swarm.behaviour_mut().kademlia.get_closest_peers(PeerId::random())`.
 
-### Step 5: Wire it all together
-1. Update `src/main.rs` to initialize the `libp2p` Swarm and the `NetworkManager` alongside the `Node`.
-2. Start the network listener (`swarm.listen_on(...)`) and dial any initial bootstrap peers provided via command-line arguments to join the DHT.
+### Step 6: Broadcast Messages
+1. Add a method `pub async fn broadcast_transaction(&mut self, tx: Transaction)` to `NetworkManager`. Serialize the tx and publish it to a Gossipsub topic (e.g., `"transactions"`).
+2. Add a method `pub async fn broadcast_block(&mut self, block: Block)`. Serialize the block and publish it to a Gossipsub topic (e.g., `"blocks"`).
+3. Update the `Node` actor to notify the `NetworkManager` when a new transaction is added to the mempool or a new block is forged, so it can be published to the network.
+
+### Step 7: Wire it all together
+1. Update `src/main.rs` to initialize the `libp2p` Swarm. You will need to build a transport (TCP + Noise encryption + Yamux multiplexing).
+2. Start the network listener (`swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)`).
+3. If a bootstrap peer multiaddr is provided via command-line arguments, dial it (`swarm.dial(...)`) and add it to Kademlia to join the DHT.
 
 Good luck! This chapter will transform your single-node simulation into a real distributed system using production-grade networking tools.
