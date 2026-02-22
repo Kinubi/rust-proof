@@ -10,4 +10,3 @@ use crate::models::transaction::Transaction;
 //    - Block(Block)
 //    - GetBlocks { from_height: u64, to_height: u64 }
 // ============================================================================
-

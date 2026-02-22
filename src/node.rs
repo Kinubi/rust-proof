@@ -1,8 +1,9 @@
 use crate::blockchain::Blockchain;
 use crate::models::block::Block;
-use crate::models::transaction::{ Transaction, TransactionData };
+use crate::models::slashing::SlashProof;
+use crate::models::transaction::{ Transaction };
 use tokio::sync::{ mpsc, oneshot };
-use crate::storage::{ Storage, SledStorage };
+use crate::storage::{ Storage };
 
 /// Commands that can be sent to the Node to interact with the Blockchain state.
 #[derive(Debug)]
@@ -20,6 +21,10 @@ pub enum NodeCommand {
     },
     GetMempool {
         responder: oneshot::Sender<Vec<Transaction>>,
+    },
+    SubmitSlashProof {
+        proof: SlashProof,
+        responder: oneshot::Sender<Result<(), &'static str>>,
     },
 }
 
@@ -62,6 +67,10 @@ impl Node {
                     let mempool = self.blockchain.get_mempool();
                     let _ = responder.send(mempool);
                 }
+                NodeCommand::SubmitSlashProof { proof, responder } => {
+                    let result = self.blockchain.state.apply_slash(proof);
+                    let _ = responder.send(result);
+                }
             }
         }
     }
@@ -73,6 +82,9 @@ mod tests {
     use ed25519_dalek::{ SigningKey, Signer };
     use rand::rngs::OsRng;
     use crate::traits::Hashable;
+    use crate::models::transaction::{ Transaction, TransactionData };
+    use tokio::sync::{ oneshot };
+    use crate::storage::{ SledStorage };
 
     #[tokio::test]
     async fn test_node_commands() {

@@ -1,6 +1,7 @@
 use crate::traits::{ Hashable, ToBytes };
 use ed25519_dalek::{ Signature, VerifyingKey };
 use std::cmp::Ordering;
+use crate::models::slashing::SlashProof;
 
 /// A transaction represents a transfer of value from one account to another.
 #[derive(Debug, Clone)]
@@ -29,6 +30,9 @@ pub enum TransactionData {
     Unstake {
         amount: u64,
     },
+    Slash {
+        proof: SlashProof,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +58,10 @@ impl ToBytes for Transaction {
             TransactionData::Unstake { amount } => {
                 bytes.extend_from_slice(&[2u8]); // 2 for Unstake
                 bytes.extend_from_slice(&amount.to_be_bytes());
+            }
+            TransactionData::Slash { proof } => {
+                bytes.extend_from_slice(&[3u8]); // 3 for Slash
+                bytes.extend_from_slice(&proof.to_bytes());
             }
         }
         bytes.extend_from_slice(&self.sequence.to_be_bytes());

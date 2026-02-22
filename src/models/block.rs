@@ -1,3 +1,4 @@
+use crate::models::slashing::SlashProof;
 use crate::traits::{ Hashable, ToBytes };
 use crate::models::transaction::Transaction;
 use ed25519_dalek::{ Signature, VerifyingKey };
@@ -17,6 +18,8 @@ pub struct Block {
     pub transactions: Vec<Transaction>,
     /// The signature of the validator proving they forged this block.
     pub signature: Option<Signature>,
+    /// Slash transactions included in this block (if any).
+    pub slash_proofs: Vec<SlashProof>,
 }
 
 impl ToBytes for Block {
@@ -27,6 +30,7 @@ impl ToBytes for Block {
         bytes.extend_from_slice(&self.previous_hash);
         bytes.extend_from_slice(&self.validator.to_bytes());
         bytes.extend_from_slice(&self.transactions.to_bytes());
+        bytes.extend_from_slice(&self.slash_proofs.to_bytes());
         bytes
     }
 }
@@ -61,6 +65,7 @@ mod tests {
             validator: validator_keypair.verifying_key(),
             transactions: vec![],
             signature: None,
+            slash_proofs: vec![],
         };
 
         // Hash the block (without signature)

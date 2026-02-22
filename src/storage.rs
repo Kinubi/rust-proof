@@ -92,6 +92,7 @@ mod tests {
             validator: validator_keypair.verifying_key(),
             transactions: vec![],
             signature: None,
+            slash_proofs: vec![],
         };
 
         let storage = SledStorage::new(db_path).unwrap();

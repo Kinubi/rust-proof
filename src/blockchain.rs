@@ -10,7 +10,7 @@ use crate::mempool::Mempool;
 #[derive(Debug, Clone)]
 pub struct Blockchain {
     chain: Vec<Block>,
-    state: State,
+    pub state: State,
     mempool: Mempool,
     storage: Box<dyn Storage>,
 }
@@ -25,6 +25,7 @@ impl Blockchain {
             validator: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap(),
             transactions: vec![],
             signature: None,
+            slash_proofs: vec![],
         };
         Self {
             chain: vec![genesis_block],
@@ -92,6 +93,11 @@ impl Blockchain {
         for tx in &self.chain.last().unwrap().transactions {
             self.mempool.remove_transaction(&tx.hash());
         }
+        for proof in &self.chain.last().unwrap().slash_proofs {
+            if let Err(e) = self.state.apply_slash(proof.clone()) {
+                println!("Failed to apply slash proof from block: {}", e);
+            }
+        }
         Ok(())
     }
 
@@ -148,6 +154,7 @@ mod tests {
             validator: validator_keypair.verifying_key(),
             transactions: vec![tx],
             signature: None,
+            slash_proofs: vec![],
         };
         let block_hash = block.hash();
         block.signature = Some(validator_keypair.sign(&block_hash[..]));
@@ -197,6 +204,7 @@ mod tests {
             validator: wrong_validator.verifying_key(),
             transactions: vec![],
             signature: None,
+            slash_proofs: vec![],
         };
         let bad_hash = bad_block.hash();
         bad_block.signature = Some(wrong_validator.sign(&bad_hash[..]));
@@ -222,6 +230,7 @@ mod tests {
             validator: correct_validator.verifying_key(),
             transactions: vec![],
             signature: None,
+            slash_proofs: vec![],
         };
         let good_hash = good_block.hash();
         good_block.signature = Some(correct_validator.sign(&good_hash[..]));

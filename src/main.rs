@@ -1,6 +1,4 @@
 use rust_proof::node::Node;
-use tokio::sync::{ mpsc, oneshot };
-use rust_proof::models::block::Block;
 
 #[tokio::main]
 async fn main() {

@@ -67,6 +67,12 @@ impl State {
                 }
                 // Additional checks for unlock_slot can be added here if needed
             }
+            TransactionData::Slash { proof } => {
+                // Slash transactions should be validated separately, but we can check the proof here as well
+                if !proof.is_valid() {
+                    return false;
+                }
+            }
         }
         let sender_nonce = self.get_nonce(&tx.sender);
         if tx.sequence != sender_nonce {
@@ -104,6 +110,11 @@ impl State {
                         amount: *amount,
                         unlock_slot: current_slot + UNSTAKE_LOCK_EPOCHS * EPOCH_LENGTH, // Example: unlock after 2 epochs
                     });
+                *self.nonces.entry(sender_key_array).or_insert(0) += 1;
+            }
+            TransactionData::Slash { proof } => {
+                // Slash transactions should be applied separately, but we can apply the slash here as well
+                let _ = self.apply_slash(proof.clone());
                 *self.nonces.entry(sender_key_array).or_insert(0) += 1;
             }
         }

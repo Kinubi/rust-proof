@@ -61,4 +61,9 @@ I have placed `TODO: Chapter 7` comments in the codebase to guide you. Here is t
 ### Step 5: Update Consensus (Optional / Advanced)
 Update `Blockchain::add_block` to enforce that the block's `slot` is strictly greater than the `latest_block.slot`. 
 
+### Step 6: Fork Choice Rule (Advanced)
+In a real network, you might receive a block that doesn't build on your `latest_block`, but instead builds on an older block (a fork). 
+1. Update `Blockchain` to store a tree of blocks rather than a single `Vec<Block>`.
+2. Implement a "Heaviest Chain" rule: when multiple valid chains exist, the node should consider the chain with the most total stake behind its blocks as the canonical chain.
+
 Good luck! This chapter introduces complex state transitions and cryptographic proofs of misbehavior.

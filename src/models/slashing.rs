@@ -1,4 +1,4 @@
-use crate::models::block::Block;
+use crate::{ models::block::Block, traits::ToBytes };
 use ed25519_dalek::VerifyingKey;
 use crate::traits::Hashable;
 
@@ -53,6 +53,16 @@ impl SlashProof {
     }
 }
 
+impl ToBytes for SlashProof {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.validator.to_bytes());
+        bytes.extend_from_slice(&self.block_a.to_bytes());
+        bytes.extend_from_slice(&self.block_b.to_bytes());
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -70,6 +80,7 @@ mod tests {
             validator: validator_keypair.verifying_key(),
             transactions: vec![],
             signature: None,
+            slash_proofs: vec![],
         };
         let mut block_b = Block {
             height: 1,
@@ -78,6 +89,7 @@ mod tests {
             validator: validator_keypair.verifying_key(),
             transactions: vec![],
             signature: None,
+            slash_proofs: vec![],
         };
         // Hash the block (without signature)
         let hash_a = block_a.hash();
