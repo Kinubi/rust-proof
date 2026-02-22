@@ -87,6 +87,7 @@ mod tests {
 
         let block = Block {
             height: 1,
+            slot: 1,
             previous_hash: [0; 32],
             validator: validator_keypair.verifying_key(),
             transactions: vec![],

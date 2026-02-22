@@ -1,14 +1,18 @@
 use std::collections::HashMap;
 use ed25519_dalek::VerifyingKey;
-use crate::models::transaction::{ Transaction, TransactionData };
+use crate::models::slashing::SlashProof;
+use crate::models::transaction::{ Transaction, TransactionData, UnstakeRequest };
 use crate::traits::{ ToBytes, Hashable };
 
+pub const EPOCH_LENGTH: u64 = 32; // Example: 32 slots per epoch
+pub const UNSTAKE_LOCK_EPOCHS: u64 = 2; // Example: unstaked funds unlock after 2 epochs
 /// The State represents the current balances and sequence numbers of all accounts.
 #[derive(Debug, Clone, Default)]
 pub struct State {
     pub balances: HashMap<[u8; 32], u64>,
     pub nonces: HashMap<[u8; 32], u64>,
     pub stakes: HashMap<[u8; 32], u64>,
+    pub unstaking: HashMap<[u8; 32], Vec<UnstakeRequest>>,
 }
 
 impl State {
@@ -17,6 +21,7 @@ impl State {
             balances: HashMap::new(),
             nonces: HashMap::new(),
             stakes: HashMap::new(),
+            unstaking: HashMap::new(),
         }
     }
 
@@ -52,6 +57,16 @@ impl State {
                     return false;
                 }
             }
+            TransactionData::Unstake { amount } => {
+                let sender_key_bytes = tx.sender.to_bytes();
+                let mut sender_key_array = [0u8; 32];
+                sender_key_array.copy_from_slice(&sender_key_bytes);
+                let current_stake = *self.stakes.get(&sender_key_array).unwrap_or(&0);
+                if current_stake < *amount {
+                    return false;
+                }
+                // Additional checks for unlock_slot can be added here if needed
+            }
         }
         let sender_nonce = self.get_nonce(&tx.sender);
         if tx.sequence != sender_nonce {
@@ -62,7 +77,7 @@ impl State {
 
     /// Applies a transaction to the state, updating balances and nonces.
     /// Assumes the transaction has already been validated.
-    pub fn apply_tx(&mut self, tx: &Transaction) {
+    pub fn apply_tx(&mut self, tx: &Transaction, current_slot: u64) {
         let sender_key_bytes = tx.sender.to_bytes();
         let mut sender_key_array = [0u8; 32];
         sender_key_array.copy_from_slice(&sender_key_bytes);
@@ -78,6 +93,17 @@ impl State {
             TransactionData::Stake { amount } => {
                 *self.balances.entry(sender_key_array).or_insert(0) -= *amount;
                 *self.stakes.entry(sender_key_array).or_insert(0) += *amount;
+                *self.nonces.entry(sender_key_array).or_insert(0) += 1;
+            }
+            TransactionData::Unstake { amount } => {
+                *self.stakes.entry(sender_key_array).or_insert(0) -= *amount;
+                self.unstaking
+                    .entry(sender_key_array)
+                    .or_insert(vec![])
+                    .push(UnstakeRequest {
+                        amount: *amount,
+                        unlock_slot: current_slot + UNSTAKE_LOCK_EPOCHS * EPOCH_LENGTH, // Example: unlock after 2 epochs
+                    });
                 *self.nonces.entry(sender_key_array).or_insert(0) += 1;
             }
         }
@@ -134,6 +160,19 @@ impl State {
             .cloned()
             .unwrap_or([0u8; 32]) // Placeholder: In a real implementation, this would be a Merkle root of the state.
     }
+
+    pub fn apply_slash(&mut self, proof: SlashProof) -> Result<(), &'static str> {
+        if proof.is_valid() {
+            let validator_key_bytes = proof.validator.to_bytes();
+            let mut validator_key_array = [0u8; 32];
+            validator_key_array.copy_from_slice(&validator_key_bytes);
+            self.stakes.remove(&validator_key_array);
+            self.unstaking.remove(&validator_key_array);
+            Ok(())
+        } else {
+            Err("Invalid slash proof")
+        }
+    }
 }
 
 #[cfg(test)]
@@ -189,7 +228,8 @@ mod tests {
         let tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 0);
 
         assert!(state.is_valid_tx(&tx));
-        state.apply_tx(&tx);
+        let current_slot = 1; // Example current slot
+        state.apply_tx(&tx, current_slot);
         assert_eq!(state.get_balance(&sender_keypair.verifying_key()), 50);
         assert_eq!(state.get_balance(&receiver_keypair.verifying_key()), 50);
         assert_eq!(state.get_nonce(&sender_keypair.verifying_key()), 1);
@@ -204,13 +244,13 @@ mod tests {
         let mut state = State::new();
 
         // Give sender ONLY 10 coins
-        // state.balances.insert(sender_keypair.verifying_key().to_bytes(), 10);
+        state.balances.insert(sender_keypair.verifying_key().to_bytes(), 10);
 
         // Try to send 50
         let tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 0);
 
         // Uncomment after implementing is_valid_tx
-        // assert!(!state.is_valid_tx(&tx), "Transaction should be invalid due to insufficient funds");
+        assert!(!state.is_valid_tx(&tx), "Transaction should be invalid due to insufficient funds");
     }
 
     #[test]
@@ -220,13 +260,13 @@ mod tests {
         let receiver_keypair = SigningKey::generate(&mut csprng);
 
         let mut state = State::new();
-        // state.balances.insert(sender_keypair.verifying_key().to_bytes(), 100);
+        state.balances.insert(sender_keypair.verifying_key().to_bytes(), 100);
 
         // Create tx with sequence 1, but expected nonce is 0
         let tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 1);
 
         // Uncomment after implementing is_valid_tx
-        // assert!(!state.is_valid_tx(&tx), "Transaction should be invalid due to wrong nonce");
+        assert!(!state.is_valid_tx(&tx), "Transaction should be invalid due to wrong nonce");
     }
 
     #[test]
@@ -236,7 +276,7 @@ mod tests {
         let receiver_keypair = SigningKey::generate(&mut csprng);
 
         let mut state = State::new();
-        // state.balances.insert(sender_keypair.verifying_key().to_bytes(), 100);
+        state.balances.insert(sender_keypair.verifying_key().to_bytes(), 100);
 
         let mut tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 0);
 

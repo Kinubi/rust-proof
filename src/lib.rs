@@ -5,3 +5,4 @@ pub mod blockchain;
 pub mod node;
 pub mod storage;
 pub mod mempool;
+pub mod network;

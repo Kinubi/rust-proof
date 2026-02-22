@@ -26,6 +26,15 @@ pub enum TransactionData {
     Stake {
         amount: u64,
     },
+    Unstake {
+        amount: u64,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct UnstakeRequest {
+    pub amount: u64,
+    pub unlock_slot: u64,
 }
 
 impl ToBytes for Transaction {
@@ -40,6 +49,10 @@ impl ToBytes for Transaction {
             }
             TransactionData::Stake { amount } => {
                 bytes.extend_from_slice(&[1u8]); // 1 for Stake
+                bytes.extend_from_slice(&amount.to_be_bytes());
+            }
+            TransactionData::Unstake { amount } => {
+                bytes.extend_from_slice(&[2u8]); // 2 for Unstake
                 bytes.extend_from_slice(&amount.to_be_bytes());
             }
         }

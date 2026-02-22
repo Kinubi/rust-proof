@@ -20,6 +20,7 @@ impl Blockchain {
     pub fn new(storage: Box<dyn Storage>) -> Self {
         let genesis_block = Block {
             height: 0,
+            slot: 0,
             previous_hash: [0u8; 32],
             validator: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).unwrap(),
             transactions: vec![],
@@ -49,32 +50,35 @@ impl Blockchain {
     }
 
     /// Adds a new block to the chain if it is valid.
-    pub fn add_block(&mut self, block: Block) -> Result<(), &'static str> {
+    pub fn add_block(&mut self, block: Block) -> Result<(), String> {
         if !block.is_valid() {
-            return Err("Invalid block signature");
+            return Err("Invalid block signature".to_string());
         }
         let latest_block = self.get_latest_block();
         if block.height != latest_block.height + 1 {
-            return Err("Invalid block height");
+            return Err("Invalid block height".to_string());
         }
         if block.previous_hash != latest_block.hash() {
-            return Err("Invalid previous hash");
+            return Err("Invalid previous hash".to_string());
         }
         if let Some(expected_validator) = self.state.get_expected_validator(block.height) {
             if block.validator != expected_validator {
-                return Err("Invalid block validator");
+                return Err("Invalid block validator".to_string());
             }
+        }
+        if block.slot <= latest_block.slot {
+            return Err("Block slot must be greater than the latest block's slot".to_string());
         }
         let mut temp_state = self.state.clone();
         for tx in &block.transactions {
             if !temp_state.is_valid_tx(tx) {
-                return Err("Invalid transaction in block");
+                return Err("Invalid transaction in block".to_string());
             }
-            temp_state.apply_tx(tx);
+            temp_state.apply_tx(tx, block.slot);
         }
         self.state = temp_state;
         if let Err(e) = self.storage.save_block(&block) {
-            return Err("Failed to save block to storage");
+            return Err(format!("Failed to save block to storage: {}", e));
         }
         if
             let Err(e) = self.storage.save_state_root(
@@ -82,7 +86,7 @@ impl Blockchain {
                 &self.state.compute_state_root()
             )
         {
-            return Err("Failed to save state root to storage");
+            return Err(format!("Failed to save state root to storage: {}", e));
         }
         self.chain.push(block);
         for tx in &self.chain.last().unwrap().transactions {
@@ -139,6 +143,7 @@ mod tests {
         let latest_block = blockchain.get_latest_block();
         let mut block = Block {
             height: latest_block.height + 1,
+            slot: 1,
             previous_hash: latest_block.hash(),
             validator: validator_keypair.verifying_key(),
             transactions: vec![tx],
@@ -187,6 +192,7 @@ mod tests {
         // 1. Try to add a block forged by the WRONG validator
         let mut bad_block = Block {
             height: latest_height + 1,
+            slot: 1,
             previous_hash: latest_hash,
             validator: wrong_validator.verifying_key(),
             transactions: vec![],
@@ -211,6 +217,7 @@ mod tests {
 
         let mut good_block = Block {
             height: latest_height + 1,
+            slot: 1,
             previous_hash: latest_hash,
             validator: correct_validator.verifying_key(),
             transactions: vec![],

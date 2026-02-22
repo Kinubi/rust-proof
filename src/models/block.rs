@@ -7,6 +7,8 @@ use ed25519_dalek::{ Signature, VerifyingKey };
 pub struct Block {
     /// The height of the block in the chain (0 for genesis).
     pub height: u64,
+    /// The slot in which this block was proposed.
+    pub slot: u64,
     /// The hash of the previous block.
     pub previous_hash: [u8; 32],
     /// The public key of the validator who forged this block.
@@ -21,6 +23,7 @@ impl ToBytes for Block {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&self.height.to_be_bytes());
+        bytes.extend_from_slice(&self.slot.to_bytes());
         bytes.extend_from_slice(&self.previous_hash);
         bytes.extend_from_slice(&self.validator.to_bytes());
         bytes.extend_from_slice(&self.transactions.to_bytes());
@@ -53,6 +56,7 @@ mod tests {
 
         let mut block = Block {
             height: 1,
+            slot: 1,
             previous_hash: [0; 32],
             validator: validator_keypair.verifying_key(),
             transactions: vec![],

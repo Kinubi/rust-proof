@@ -13,7 +13,7 @@ pub enum NodeCommand {
     },
     AddBlock {
         block: Block,
-        responder: oneshot::Sender<Result<(), &'static str>>,
+        responder: oneshot::Sender<Result<(), String>>,
     },
     GetLatestBlock {
         responder: oneshot::Sender<Block>,
