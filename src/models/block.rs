@@ -3,8 +3,10 @@ use crate::traits::{ Hashable, ToBytes };
 use crate::models::transaction::Transaction;
 use ed25519_dalek::{ Signature, VerifyingKey };
 
+use serde_derive::{ Serialize, Deserialize };
+
 /// A block contains a list of transactions and a reference to the previous block.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Block {
     /// The height of the block in the chain (0 for genesis).
     pub height: u64,
@@ -49,7 +51,7 @@ impl Block {
         }
     }
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockNode {
     pub block: Block,
     pub children: Vec<[u8; 32]>, // Hashes of child blocks

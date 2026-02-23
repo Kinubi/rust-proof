@@ -1,6 +1,7 @@
-// use libp2p::{gossipsub, kad, request_response, swarm::NetworkBehaviour, Swarm};
-use crate::node::NodeCommand;
+use libp2p::{ Swarm, gossipsub, kad, noise, request_response, swarm::NetworkBehaviour, tcp, yamux };
+use crate::network::message::NetworkMessage;
 use tokio::sync::mpsc;
+use crate::node::NodeCommand;
 
 // ============================================================================
 // TODO: Chapter 8 - Define NetworkBehaviour
@@ -8,19 +9,88 @@ use tokio::sync::mpsc;
 //    that combines gossipsub, kademlia, and request_response.
 // ============================================================================
 
+#[derive(NetworkBehaviour)]
+pub struct AppBehaviour {
+    pub gossipsub: gossipsub::Behaviour,
+    pub kademlia: kad::Behaviour<kad::store::MemoryStore>,
+    pub request_response: request_response::json::Behaviour<NetworkMessage, NetworkMessage>,
+}
+
 /// Manages P2P network connections and message broadcasting using libp2p.
 pub struct NetworkManager {
     // TODO: Chapter 8 - Add the libp2p Swarm here
-    // swarm: Swarm<AppBehaviour>,
-    
+    swarm: Swarm<AppBehaviour>,
+
     /// Channel to send commands back to the central Node.
     node_sender: mpsc::Sender<NodeCommand>,
 }
 
 impl NetworkManager {
     pub fn new(node_sender: mpsc::Sender<NodeCommand>) -> Self {
+        let mut swarm = libp2p::SwarmBuilder
+            ::with_new_identity()
+            .with_tokio()
+            .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)
+            .unwrap()
+            .with_behaviour(|key_pair| {
+                let mut kad_config = kad::Config::new(
+                    libp2p::StreamProtocol::new("/rust-proof/kad/1.0.0")
+                );
+                kad_config.set_periodic_bootstrap_interval(
+                    Some(std::time::Duration::from_secs(10))
+                );
+
+                let gossipsub_config = gossipsub::ConfigBuilder
+                    ::default()
+                    .heartbeat_interval(std::time::Duration::from_secs(10))
+                    .validation_mode(gossipsub::ValidationMode::Strict)
+                    .message_id_fn(|message| {
+                        use std::hash::{ Hash, Hasher };
+                        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                        message.data.hash(&mut hasher);
+                        message.topic.hash(&mut hasher);
+                        if let Some(peer_id) = message.source {
+                            peer_id.hash(&mut hasher);
+                        }
+                        let now = std::time::SystemTime
+                            ::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_millis();
+                        now.to_string().hash(&mut hasher);
+                        gossipsub::MessageId::from(hasher.finish().to_string())
+                    })
+                    .build()?;
+
+                Ok(AppBehaviour {
+                    kademlia: kad::Behaviour::with_config(
+                        key_pair.public().to_peer_id(),
+                        kad::store::MemoryStore::new(key_pair.public().to_peer_id()),
+                        kad_config
+                    ),
+                    gossipsub: gossipsub::Behaviour::new(
+                        gossipsub::MessageAuthenticity::Signed(key_pair.clone()),
+                        gossipsub_config
+                    )?,
+                    request_response: request_response::json::Behaviour::new(
+                        [
+                            (
+                                libp2p::StreamProtocol::new("/rust-proof/sync/1.0.0"),
+                                request_response::ProtocolSupport::Full,
+                            ),
+                        ],
+                        request_response::Config::default()
+                    ),
+                })
+            })
+            .unwrap()
+            .with_swarm_config(|config| {
+                config.with_idle_connection_timeout(std::time::Duration::from_secs(30))
+            })
+            .build();
         Self {
             node_sender,
+            swarm,
         }
     }
 

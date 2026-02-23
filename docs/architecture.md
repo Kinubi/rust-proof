@@ -187,3 +187,13 @@ By completing this journey, you will master:
 *   **Advanced Error Handling:** Managing errors across asynchronous boundaries.
 *   **Network Programming:** Building robust P2P protocols with `libp2p`.
 *   **Cryptographic Engineering:** Safely implementing hashing, signatures, and Merkle trees.
+
+## Future Extensions & Advanced Features
+
+Once the core architecture is complete, the blockchain can be extended with several advanced, production-grade features. We have prepared preliminary documentation for these future directions:
+
+*   **[Programmability & Smart Contracts](programmability.md):** Adding a Wasm VM, EVM compatibility, or native custom assets to support decentralized applications.
+*   **[Advanced Cryptography & Consensus](advanced_cryptography.md):** Implementing BLS signature aggregation, Verifiable Delay Functions (VDFs), and fast finality gadgets.
+*   **[Scalability & Storage Optimization](scalability.md):** Managing state growth through pruning, state rent, and laying the groundwork for rollups/sharding.
+*   **[Privacy](privacy.md):** Protecting user data and preventing MEV using Zero-Knowledge proofs (zk-SNARKs) and encrypted mempools.
+*   **[Governance & Interoperability](governance_interoperability.md):** Enabling on-chain voting for protocol upgrades, light client protocols, and cross-chain communication (IBC).

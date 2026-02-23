@@ -1,10 +1,11 @@
 use crate::traits::{ Hashable, ToBytes };
 use ed25519_dalek::{ Signature, VerifyingKey };
+use serde::{ Deserialize, Serialize };
 use std::cmp::Ordering;
 use crate::models::slashing::SlashProof;
 
 /// A transaction represents a transfer of value from one account to another.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     /// The public key of the sender.
     pub sender: VerifyingKey,
@@ -18,7 +19,7 @@ pub struct Transaction {
     pub signature: Option<Signature>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransactionData {
     Transfer {
         receiver: VerifyingKey,

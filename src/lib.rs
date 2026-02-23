@@ -1,8 +1,8 @@
 pub mod traits;
 pub mod models;
-pub mod state;
-pub mod blockchain;
+pub mod network;
 pub mod node;
 pub mod storage;
+pub mod blockchain;
 pub mod mempool;
-pub mod network;
+pub mod state;

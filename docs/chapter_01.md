@@ -44,26 +44,6 @@ We need a way to convert any struct into bytes, and then hash those bytes.
 ### Hints for `Hashable`:
 * You want to write: `impl<T: ToBytes> Hashable for T { ... }`
 * Inside the `hash` method, call `self.to_bytes()`.
-* Then use the `sha2` crate to hash those bytes. You'll need to create a new `Sha256` hasher, update it with your bytes, and finalize it. The `sha2` crate documentation or examples online usually show this as:
-  ```rust
-  let mut hasher = Sha256::new();
-  hasher.update(&bytes);
-  let result = hasher.finalize();
-  // result is a GenericArray, you can convert it to [u8; 32] using .into()
-  ```
+* Then use the `sha2` crate to hash those bytes.
 
-### Hints for `Transaction` (in `src/models/transaction.rs`):
-* **`ToBytes`:** Create a mutable `Vec<u8>`. Call `.to_bytes()` on `sender`, `receiver`, `amount`, and `sequence`, and extend your vector with these bytes. **Do not** include the `signature` field, as the signature is generated *from* this hash.
-* **`is_valid`:** 
-  1. Extract the signature. If `self.signature` is `None`, return `false`.
-  2. Get the hash of the transaction by calling `self.hash()`. (This works because `Transaction` implements `ToBytes`, and we wrote a blanket impl for `Hashable`!).
-  3. Use the `ed25519_dalek` API to verify: `self.sender.verify_strict(&hash, &sig).is_ok()`.
-
-### Hints for `Block` (in `src/models/block.rs`):
-* **`ToBytes`:** Similar to `Transaction`, create a `Vec<u8>` and extend it with the bytes of `height`, `previous_hash`, `validator`, and `transactions`. Again, omit the `signature`.
-* **`is_valid`:** 
-  1. Extract the signature. If `self.signature` is `None`, return `false`.
-  2. Hash the block using `self.hash()`.
-  3. Verify the signature using the validator's public key: `self.validator.verify_strict(&hash, &sig).is_ok()`.
-
-Go to `src/traits.rs`, `src/models/transaction.rs`, and `src/models/block.rs` and complete the `TODO`s. Run `cargo test` to verify your implementation.
+Go to `src/traits.rs` and complete the `TODO`s. Run `cargo test` to verify your implementation.

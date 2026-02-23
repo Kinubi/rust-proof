@@ -1,10 +1,11 @@
 use crate::{ models::block::Block, traits::ToBytes };
 use ed25519_dalek::VerifyingKey;
+use serde::{ Deserialize, Serialize };
 use crate::traits::Hashable;
 
 /// A cryptographic proof that a validator signed two different blocks for the same slot.
 /// This is a slashable offense (equivocation).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlashProof {
     pub validator: VerifyingKey,
     pub block_a: Block,
