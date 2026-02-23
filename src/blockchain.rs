@@ -176,6 +176,23 @@ impl Blockchain {
     pub fn get_mempool(&self) -> Vec<Transaction> {
         self.mempool.get_pending_transactions(self.mempool.len())
     }
+
+    pub fn get_blocks(&self, from_height: u64, to_height: u64) -> Vec<Block> {
+        let mut blocks = Vec::new();
+        let mut current_hash = self.head_hash;
+
+        while let Some(node) = self.chain.get(&current_hash) {
+            if node.block.height >= from_height && node.block.height <= to_height {
+                blocks.push(node.block.clone());
+            }
+            if node.block.height == 0 {
+                break;
+            }
+            current_hash = node.block.previous_hash;
+        }
+        blocks.reverse(); // Return in ascending order
+        blocks
+    }
 }
 
 #[cfg(test)]

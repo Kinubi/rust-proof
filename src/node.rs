@@ -26,6 +26,11 @@ pub enum NodeCommand {
         proof: SlashProof,
         responder: oneshot::Sender<Result<(), &'static str>>,
     },
+    GetBlocksByHeight {
+        from_height: u64,
+        to_height: u64,
+        responder: oneshot::Sender<Result<Vec<Block>, String>>,
+    },
 }
 
 /// The Node is the central state manager. It owns the Blockchain and processes
@@ -70,6 +75,10 @@ impl Node {
                 NodeCommand::SubmitSlashProof { proof, responder } => {
                     let result = self.blockchain.state.apply_slash(proof);
                     let _ = responder.send(result);
+                }
+                NodeCommand::GetBlocksByHeight { from_height, to_height, responder } => {
+                    let result = self.blockchain.get_blocks(from_height, to_height);
+                    let _ = responder.send(Ok(result));
                 }
             }
         }

@@ -15,11 +15,15 @@ use serde::{ Serialize, Deserialize };
 pub enum NetworkMessage {
     NewTransaction(Transaction),
     NewBlock(Block),
-    SyncRequest {
-        from_height: u64,
-        to_height: u64,
-    },
-    SyncResponse {
-        blocks: Vec<Block>,
-    },
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SyncRequest {
+    pub from_height: u64,
+    pub to_height: u64,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct SyncResponse {
+    pub blocks: Vec<Block>,
 }

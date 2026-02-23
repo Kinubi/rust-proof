@@ -1,6 +1,17 @@
-use libp2p::{ Swarm, gossipsub, kad, noise, request_response, swarm::NetworkBehaviour, tcp, yamux };
-use crate::network::message::NetworkMessage;
-use tokio::sync::mpsc;
+use libp2p::{
+    Swarm,
+    futures::StreamExt,
+    gossipsub,
+    kad,
+    noise,
+    request_response,
+    swarm::NetworkBehaviour,
+    swarm::SwarmEvent,
+    tcp,
+    yamux,
+};
+use crate::network::message::{ NetworkMessage, SyncRequest, SyncResponse };
+use tokio::{ select, sync::mpsc };
 use crate::node::NodeCommand;
 
 // ============================================================================
@@ -13,7 +24,7 @@ use crate::node::NodeCommand;
 pub struct AppBehaviour {
     pub gossipsub: gossipsub::Behaviour,
     pub kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    pub request_response: request_response::json::Behaviour<NetworkMessage, NetworkMessage>,
+    pub request_response: request_response::json::Behaviour<SyncRequest, SyncResponse>,
 }
 
 /// Manages P2P network connections and message broadcasting using libp2p.
@@ -103,7 +114,78 @@ impl NetworkManager {
         // 3. Handle RequestResponse events (fetch blocks and send back).
         // 4. Handle Kademlia events (add discovered peers to Gossipsub).
         // ====================================================================
-        println!("NetworkManager started");
+
+        loop {
+            select! {
+            event = self.swarm.select_next_some() => match event {
+                SwarmEvent::NewListenAddr { address, .. } => {
+                    println!("Listening on {}", address);
+                }
+                SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                    println!("Connected to {}", peer_id);
+                }
+                SwarmEvent::Behaviour(event) => {
+                    match event {
+                        AppBehaviourEvent::Gossipsub(gossipsub::Event::Message { message, .. }) => {
+                            println!("Received Gossipsub message on topic {}: {:?}", message.topic, message.data);
+                            if let Ok(network_message) = serde_json::from_slice::<NetworkMessage>(&message.data) {
+                                println!("Deserialized NetworkMessage: {:?}", network_message);
+                                match network_message {
+                                    NetworkMessage::NewTransaction(tx) => {
+                                        let _ = self.node_sender.send(NodeCommand::AddTransaction { transaction: tx, responder: tokio::sync::oneshot::channel().0 }).await;
+                                    }
+                                    NetworkMessage::NewBlock(block) => {
+                                        let _ = self.node_sender.send(NodeCommand::AddBlock { block, responder: tokio::sync::oneshot::channel().0 }).await;
+                                    }
+                                }
+                            } else {
+                                println!("Failed to deserialize Gossipsub message");
+                            }
+                        }
+                        AppBehaviourEvent::RequestResponse(event) => {
+                            match event {
+                                request_response::Event::Message { peer, connection_id, message } => {
+                                    println!("Received RequestResponse message from {}, connection {}: {:?}", peer, connection_id, message);
+                                    match message {
+                                        request_response::Message::Request { request, channel, .. } => {
+                                            println!("Received sync request: from {} to {}", request.from_height, request.to_height);
+                                            let responder = tokio::sync::oneshot::channel();
+                                            self.node_sender.send(NodeCommand::GetBlocksByHeight {
+                                                from_height: request.from_height,
+                                                to_height: request.to_height,
+                                                responder: responder.0, // TODO: Send response back to peer
+                                            }).await.unwrap();
+                                            let blocks = responder.1.await.unwrap().unwrap();
+                                            println!("Fetched {} blocks from Node", blocks.len());
+                                            self.swarm.behaviour_mut().request_response.send_response(channel, SyncResponse { blocks }).unwrap();
+                                        }
+                                        request_response::Message::Response { response, .. } => {
+                                            println!("Received sync response with {} blocks", response.blocks.len());
+                                            for block in &response.blocks {
+                                                let _ = self.node_sender.send(NodeCommand::AddBlock { block: block.clone(), responder: tokio::sync::oneshot::channel().0 }).await;
+                                            }
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        AppBehaviourEvent::Kademlia(event) => {
+                            println!("Received Kademlia event: {:?}", event);
+                        }    
+                             _ => {
+                            println!("Received other event: {:?}", event);
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ = tokio::signal::ctrl_c() => {
+                println!("Shutting down...");
+                break;
+                }
+            }
+        }
     }
 
     /// Broadcasts a transaction to the network via Gossipsub.
