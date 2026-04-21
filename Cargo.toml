@@ -10,14 +10,17 @@ default-members = [
     "rust-proof-client",
 ]
 
-[profile.dev.package.erp]
+[profile.dev.package.erp-client]
 debug = true
 opt-level = "z"
 
-[profile.release.package.erp]
+[profile.release.package.erp-client]
 opt-level = "s"
+
+
 
 [patch.crates-io]
 esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal.git", branch = "master" }
 esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git", branch = "master" }
 esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys.git", branch = "master" }
+
