@@ -38,7 +38,7 @@ pub struct NetworkManager {
 
 impl NetworkManager {
     pub fn new(node_sender: mpsc::Sender<NodeCommand>) -> Self {
-        let mut swarm = libp2p::SwarmBuilder
+        let swarm = libp2p::SwarmBuilder
             ::with_new_identity()
             .with_tokio()
             .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)
