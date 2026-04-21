@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{ Parser, Subcommand };
 
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:8545";
 
@@ -33,7 +33,9 @@ fn main() -> Result<()> {
 fn print_status(rpc_url: &str) {
     println!("rust-proof desktop client");
     println!("rpc endpoint: {rpc_url}");
-    println!("status RPC is not wired yet; this crate is the CLI scaffold for future node interaction.");
+    println!(
+        "status RPC is not wired yet; this crate is the CLI scaffold for future node interaction."
+    );
 }
 
 fn print_keygen_todo() {
