@@ -46,6 +46,6 @@ This directory should be reduced over time until:
 
 ## Design references
 
-For the system-level design, see the root [system design](/home/barend/repos/rust-proof/docs/system-design.md).
+For the system-level design, see the root [system design](../docs/system-design.md).
 
-For the current migration plan, see [ROADMAP.md](/home/barend/repos/rust-proof/ROADMAP.md).
+For the current migration plan, see [ROADMAP.md](../ROADMAP.md).

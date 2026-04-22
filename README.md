@@ -56,11 +56,11 @@ Current directories map to the target design like this:
 
 ## Detailed design
 
-See [docs/system-design.md](/home/barend/repos/rust-proof/docs/system-design.md) for the full architecture.
+See [docs/system-design.md](docs/system-design.md) for the full architecture.
 
-See [ROADMAP.md](/home/barend/repos/rust-proof/ROADMAP.md) for the migration plan.
+See [ROADMAP.md](ROADMAP.md) for the migration plan.
 
-See [PHASE_1_BUILD_PLAN.md](/home/barend/repos/rust-proof/PHASE_1_BUILD_PLAN.md) for the next execution phase.
+See [PHASE_1_BUILD_PLAN.md](PHASE_1_BUILD_PLAN.md) for the next execution phase.
 
 ## Current build notes
 
