@@ -1,20 +1,24 @@
 [workspace]
 resolver = "2"
 members = [
-    "rust-proof-core",
-    "rust-proof-client",
-    "erp-client",
+    "rp-core",
+    "rp-node",
+    "rp-runtime",
+    "rp-client",
+    "erp-runtime",
 ]
 default-members = [
-    "rust-proof-core",
-    "rust-proof-client",
+    "rp-core",
+    "rp-node",
+    "rp-runtime",
+    "rp-client",
 ]
 
-[profile.dev.package.erp-client]
+[profile.dev.package.erp-runtime]
 debug = true
 opt-level = "z"
 
-[profile.release.package.erp-client]
+[profile.release.package.erp-runtime]
 opt-level = "s"
 
 

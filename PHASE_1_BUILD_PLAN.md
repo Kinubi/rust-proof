@@ -57,7 +57,7 @@ Phase 1 is done when all of the following are true:
 
 This step prevents implementation churn from dragging the project back to the older host-node plus embedded-client model.
 
-## Step 1. Reduce The Current Mixed `rust-proof-core/` Crate
+## Step 1. Reduce The Current Mixed `rp-core/` Crate
 
 ### Objective
 
@@ -95,22 +95,22 @@ Write down the actual runtime boundary before moving large amounts of code.
 
 Without this step, the runtime split will collapse into ad hoc callbacks and duplicated logic.
 
-## Step 3. Repurpose `rust-proof-node/` Toward `rp-runtime`
+## Step 3. Fill In `rp-runtime/`
 
 ### Objective
 
-Treat the current placeholder directory as the future host runtime shell, not as the canonical node engine.
+Treat the current `rp-runtime/` crate as the host runtime shell, not as the canonical node engine.
 
 ### Constraints
 
 - keep host runtime logic out of the future shared node engine
 - avoid putting protocol or consensus logic into the runtime shell
 
-## Step 4. Reposition `erp-client/` As `erp-runtime`
+## Step 4. Evolve `erp-runtime/`
 
 ### Objective
 
-Treat the embedded crate as the embedded node runtime rather than as a simple client.
+Treat the embedded crate as the embedded node runtime rather than as a simple client shell.
 
 ### Responsibilities to document and then implement
 
@@ -121,7 +121,7 @@ Treat the embedded crate as the embedded node runtime rather than as a simple cl
 - bounded memory policy
 - optional local web-wallet hosting later
 
-## Step 5. Reposition `rust-proof-client/` As `rp-client`
+## Step 5. Evolve `rp-client/`
 
 ### Objective
 
@@ -152,7 +152,7 @@ After the role boundaries are clear, identify the first safe code movement slice
 
 Once the docs are accepted, the highest-leverage coding task is:
 
-**Split the current `rust-proof-core/` code into blockchain-engine concerns and node-engine concerns before doing any runtime-specific feature work.**
+**Split the current `rp-core/` code into blockchain-engine concerns and node-engine concerns before doing any runtime-specific feature work.**
 
 That is the move that makes every later crate boundary honest.
 

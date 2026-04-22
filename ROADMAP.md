@@ -63,14 +63,15 @@ The wallet and operator application.
 
 ## 3. Current Repository Reality
 
-The repository is not fully migrated yet.
+The repository is not fully migrated yet at the code-boundary level.
 
 Current mapping:
 
-- `rust-proof-core/` is a transitional mixed crate and needs to be split into `rp-core` and `rp-node`
-- `rust-proof-node/` is a placeholder and should become `rp-runtime`
-- `rust-proof-client/` should evolve into `rp-client`
-- `erp-client/` should evolve into `erp-runtime`
+- `rp-core/` is still a transitional mixed crate and needs to be split internally into `rp-core` and `rp-node` boundaries
+- `rp-node/` exists as the shared node-engine crate skeleton
+- `rp-runtime/` exists as the host runtime shell crate skeleton
+- `rp-client/` is the wallet application scaffold
+- `erp-runtime/` is the embedded runtime scaffold
 
 This roadmap describes the target model, not the current implementation state.
 
@@ -127,7 +128,7 @@ Separate blockchain rules from node behavior inside the current mixed codebase.
 
 ### Tasks
 
-- isolate blockchain engine concerns inside the current `rust-proof-core/` tree
+- isolate blockchain engine concerns inside the current `rp-core/` tree
 - define what belongs in the future `rp-node`
 - identify all runtime-coupled code paths in the current mixed crate
 - move validation and state transition logic behind a smaller engine boundary
@@ -135,13 +136,13 @@ Separate blockchain rules from node behavior inside the current mixed codebase.
 
 ### Current files that must be split or reduced
 
-- `rust-proof-core/src/blockchain.rs`
-- `rust-proof-core/src/state.rs`
-- `rust-proof-core/src/mempool.rs`
-- `rust-proof-core/src/storage.rs`
-- `rust-proof-core/src/node.rs`
-- `rust-proof-core/src/network/`
-- `rust-proof-core/src/main.rs`
+- `rp-core/src/blockchain.rs`
+- `rp-core/src/state.rs`
+- `rp-core/src/mempool.rs`
+- `rp-core/src/storage.rs`
+- `rp-core/src/node.rs`
+- `rp-core/src/network/`
+- `rp-core/src/main.rs`
 
 ### Exit criteria
 
@@ -195,7 +196,7 @@ Create the desktop or server runtime that hosts `rp-node`.
 
 ### Tasks
 
-- repurpose the current `rust-proof-node/` placeholder toward the `rp-runtime` role
+- evolve `rp-runtime/` from a crate skeleton into the real host runtime
 - wire host transport integration into the node engine boundary
 - wire host storage integration into the node engine boundary
 - provide process lifecycle, logging, and metrics
@@ -218,7 +219,7 @@ Create the embedded runtime that hosts the same `rp-node`.
 
 ### Tasks
 
-- evolve the current `erp-client/` into the embedded runtime role
+- evolve `erp-runtime/` into the real embedded runtime
 - implement the transport boundary for the embedded network stack
 - implement bounded storage behavior suitable for the device
 - implement timer and wake integration
@@ -241,7 +242,7 @@ Turn the current desktop client scaffold into the wallet and operator applicatio
 
 ### Tasks
 
-- evolve `rust-proof-client/` into the `rp-client` role
+- evolve `rp-client/` into the full wallet and operator application
 - support key management
 - support transaction construction and signing
 - support transaction submission and node inspection

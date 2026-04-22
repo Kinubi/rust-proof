@@ -1,6 +1,6 @@
 # rust-proof Core Transition
 
-`rust-proof-core/` currently contains a mixed set of code paths that are on the way to two different target crates:
+`rp-core/` currently contains a mixed set of code paths that are on the way to two different internal boundaries:
 
 - `rp-core`
 - `rp-node`

@@ -1,0 +1,9 @@
+[package]
+name = "rp-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "rp-runtime"
+path = "src/main.rs"

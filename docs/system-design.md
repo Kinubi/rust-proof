@@ -162,18 +162,22 @@ Responsibilities:
 
 ## 4. Current Repository To Target Mapping
 
-The current repository has not yet been renamed into the target crates. The current-to-target mapping is:
+The repository now uses the target crate names at the directory level, but the internal code has not finished migrating to the target boundaries.
 
-- current `rust-proof-core/`
-  - will be split into `rp-core` and `rp-node`
-- current `rust-proof-node/`
-  - should become `rp-runtime`
-- current `rust-proof-client/`
-  - should become `rp-client`
-- current `erp-client/`
-  - should become `erp-runtime`
+Current state:
 
-This matters because the current tree still contains mixed code in `rust-proof-core/`, including host runtime concerns that do not belong in the final `rp-core` or `rp-node` boundary.
+- current `rp-core/`
+  - still contains mixed code that must be split into true `rp-core` and `rp-node` boundaries
+- current `rp-node/`
+  - exists as the destination crate for the shared node engine but is not implemented yet
+- current `rp-runtime/`
+  - exists as the destination host runtime shell but is not implemented yet
+- current `rp-client/`
+  - exists as the wallet application scaffold
+- current `erp-runtime/`
+  - exists as the embedded runtime scaffold
+
+This matters because the current tree still contains mixed code in `rp-core/`, including host runtime concerns that do not belong in the final `rp-core` or `rp-node` boundary.
 
 ## 5. Node Engine Design
 
@@ -373,11 +377,11 @@ This gives the project freedom to:
 The migration from the current repository should happen in this order:
 
 1. finish the architecture rewrite and freeze the target crate model
-2. reduce `rust-proof-core/` until the blockchain engine is isolated
+2. reduce `rp-core/` until the blockchain engine is isolated
 3. extract the device-agnostic node engine out of the current mixed runtime code
-4. repurpose `rust-proof-node/` into the host runtime shell
-5. evolve `erp-client/` into the embedded runtime shell
-6. evolve `rust-proof-client/` into the wallet application
+4. fill in `rp-runtime/` as the host runtime shell
+5. evolve `erp-runtime/` into the embedded runtime shell
+6. evolve `rp-client/` into the wallet application
 7. move protocol and runtime interfaces to the correct crates only after the seams are stable
 
 ## 13. Design Rules

@@ -1,9 +1,9 @@
-use rust_proof::node::Node;
+use rp_core::node::Node;
 
 #[tokio::main]
 async fn main() {
     println!("Starting rust-proof node...");
-    let storage = Box::new(rust_proof::storage::SledStorage::new("data").unwrap());
+    let storage = Box::new(rp_core::storage::SledStorage::new("data").unwrap());
     let (node, sender) = Node::new(storage);
     tokio::spawn(async move {
         node.run().await;
@@ -11,7 +11,7 @@ async fn main() {
 
     let responder = tokio::sync::oneshot::channel();
     sender
-        .send(rust_proof::node::NodeCommand::GetLatestBlock { responder: responder.0 }).await
+        .send(rp_core::node::NodeCommand::GetLatestBlock { responder: responder.0 }).await
         .unwrap();
 
     println!("Latest block: {:?}", responder.1.await.unwrap());

@@ -32,18 +32,20 @@ The core idea is simple:
 
 ## Current repository state
 
-The repository has not been fully renamed into the target crate set yet.
+The repository now uses the target crate names at the directory level, but the code inside those crates is still in transition.
 
 Current directories map to the target design like this:
 
-- `rust-proof-core/`
-	- transitional mixed crate that will be split into `rp-core` and `rp-node`
-- `rust-proof-node/`
-	- placeholder for the future `rp-runtime`
-- `rust-proof-client/`
-	- transitional wallet and operator application that will become `rp-client`
-- `erp-client/`
-	- transitional embedded runtime that will become `erp-runtime`
+- `rp-core/`
+	- still a transitional mixed crate that must be split internally into true `rp-core` and `rp-node` boundaries
+- `rp-node/`
+	- crate skeleton for the shared node engine
+- `rp-runtime/`
+	- runtime shell crate for the desktop or server side
+- `rp-client/`
+	- wallet and operator application scaffold
+- `erp-runtime/`
+	- embedded runtime scaffold
 
 ## Design rules
 
@@ -66,6 +68,6 @@ See [PHASE_1_BUILD_PLAN.md](PHASE_1_BUILD_PLAN.md) for the next execution phase.
 
 The workspace is still in a transitional state.
 
-- `erp-client/` keeps embedded target-specific configuration
-- host-oriented crates and docs are still being split out of the current mixed `rust-proof-core/` crate
-- the wallet and runtime crates have not yet been fully renamed to their target identities
+- `erp-runtime/` keeps embedded target-specific configuration
+- host-oriented and node-engine code are still being split out of the current mixed `rp-core/` crate
+- the crate names now match the target architecture, but the internal code boundaries do not yet

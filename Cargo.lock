@@ -1171,7 +1171,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
-name = "erp-client"
+name = "erp-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -3458,25 +3458,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "rtnetlink"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b960d5d873a75b5be9761b1e73b146f52dddcd27bac75263f40fba686d4d7b5"
+name = "rp-client"
+version = "0.1.0"
 dependencies = [
- "futures-channel",
- "futures-util",
- "log",
- "netlink-packet-core",
- "netlink-packet-route",
- "netlink-proto",
- "netlink-sys",
- "nix 0.30.1",
- "thiserror 1.0.69",
- "tokio",
+ "anyhow",
+ "clap",
 ]
 
 [[package]]
-name = "rust-proof"
+name = "rp-core"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
@@ -3492,11 +3482,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-proof-client"
+name = "rp-node"
 version = "0.1.0"
+
+[[package]]
+name = "rp-runtime"
+version = "0.1.0"
+
+[[package]]
+name = "rtnetlink"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b960d5d873a75b5be9761b1e73b146f52dddcd27bac75263f40fba686d4d7b5"
 dependencies = [
- "anyhow",
- "clap",
+ "futures-channel",
+ "futures-util",
+ "log",
+ "netlink-packet-core",
+ "netlink-packet-route",
+ "netlink-proto",
+ "netlink-sys",
+ "nix 0.30.1",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

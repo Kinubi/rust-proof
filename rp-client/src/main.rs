@@ -4,7 +4,7 @@ use clap::{ Parser, Subcommand };
 const DEFAULT_RPC_URL: &str = "http://127.0.0.1:8545";
 
 #[derive(Debug, Parser)]
-#[command(name = "rust-proof-client", about = "Desktop client scaffold for rust-proof")]
+#[command(name = "rp-client", about = "Wallet and operator app scaffold for rust-proof")]
 struct Cli {
     #[arg(long, default_value = DEFAULT_RPC_URL)]
     rpc_url: String,
@@ -31,11 +31,9 @@ fn main() -> Result<()> {
 }
 
 fn print_status(rpc_url: &str) {
-    println!("rust-proof desktop client");
+    println!("rp-client wallet app");
     println!("rpc endpoint: {rpc_url}");
-    println!(
-        "status RPC is not wired yet; this crate is the CLI scaffold for future node interaction."
-    );
+    println!("status RPC is not wired yet; this crate is the wallet and operator scaffold.");
 }
 
 fn print_keygen_todo() {
@@ -49,7 +47,7 @@ mod tests {
 
     #[test]
     fn parses_default_cli_values() {
-        let cli = Cli::parse_from(["rust-proof-client"]);
+        let cli = Cli::parse_from(["rp-client"]);
 
         assert_eq!(cli.rpc_url, DEFAULT_RPC_URL);
         assert!(cli.command.is_none());

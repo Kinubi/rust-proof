@@ -1,6 +1,6 @@
 # rust-proof Client
 
-`rust-proof-client/` is the current repository path for the future `rp-client` crate.
+`rp-client/` is the wallet and operator application crate.
 
 Its target role is the wallet and operator application for the `rust-proof` network.
 

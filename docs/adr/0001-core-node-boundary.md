@@ -93,14 +93,15 @@ It is `std`-based and owns:
 
 ### Repository consequences
 
-The current repository names are transitional.
+The directory names now match the target crate names, but the internal code is still transitional.
 
 Target mapping:
 
-- current `rust-proof-core/` splits into `rp-core` and `rp-node`
-- current `rust-proof-node/` becomes `rp-runtime`
-- current `rust-proof-client/` becomes `rp-client`
-- current `erp-client/` becomes `erp-runtime`
+- current `rp-core/` must still be split internally into `rp-core` and `rp-node` boundaries
+- current `rp-node/` is the destination shared node-engine crate
+- current `rp-runtime/` is the destination host runtime crate
+- current `rp-client/` is the wallet application crate
+- current `erp-runtime/` is the embedded runtime crate
 
 ### Implementation consequences
 
