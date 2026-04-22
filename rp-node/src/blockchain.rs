@@ -1,10 +1,12 @@
 use crate::mempool::Mempool;
 use crate::storage::Storage;
+use crate::errors::NodeError;
 use rp_core::models::block::{ Block, BlockNode };
 use rp_core::models::transaction::Transaction;
 use rp_core::state::State;
 use rp_core::blockchain::{ validate_and_apply_block, should_replace_head };
 use rp_core::traits::{ Hashable };
+use rp_core::errors::{ BlockError };
 use std::collections::HashMap;
 
 /// The Blockchain represents the entire ledger, including the chain of blocks,
@@ -62,7 +64,7 @@ impl Blockchain {
         }
     }
 
-    pub fn add_block(&mut self, block: Block) -> Result<(), String> {
+    pub fn add_block(&mut self, block: Block) -> Result<(), NodeErrors> {
         let parent_node = self.chain
             .get(&block.previous_hash)
             .ok_or_else(|| "Parent block not found (orphan)".to_string())?;
@@ -76,10 +78,10 @@ impl Blockchain {
         let block_hash = block.hash();
 
         if let Err(e) = self.storage.save_block(&block) {
-            return Err(format!("Failed to save block to storage: {}", e));
+            return Err(NodeError::BlockStorageError);
         }
         if let Err(e) = self.storage.save_state_snapshot(&block_hash, &applied_block.next_state) {
-            return Err(format!("Failed to save state snapshot: {}", e));
+            return Err(NodeError::StateStorageError);
         }
 
         if let Some(parent_node_mut) = self.chain.get_mut(&block.previous_hash) {
