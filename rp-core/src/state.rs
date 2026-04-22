@@ -1,27 +1,29 @@
-use std::collections::HashMap;
 use ed25519_dalek::VerifyingKey;
 use crate::models::slashing::SlashProof;
 use crate::models::transaction::{ Transaction, TransactionData, UnstakeRequest };
 use crate::traits::{ ToBytes, FromBytes, Hashable };
+use alloc::vec::Vec;
+use alloc::vec;
+use alloc::collections::BTreeMap;
 
 pub const EPOCH_LENGTH: u64 = 32; // Example: 32 slots per epoch
 pub const UNSTAKE_LOCK_EPOCHS: u64 = 2; // Example: unstaked funds unlock after 2 epochs
 /// The State represents the current balances and sequence numbers of all accounts.
 #[derive(Debug, Clone, Default)]
 pub struct State {
-    pub balances: HashMap<[u8; 32], u64>,
-    pub nonces: HashMap<[u8; 32], u64>,
-    pub stakes: HashMap<[u8; 32], u64>,
-    pub unstaking: HashMap<[u8; 32], Vec<UnstakeRequest>>,
+    pub balances: BTreeMap<[u8; 32], u64>,
+    pub nonces: BTreeMap<[u8; 32], u64>,
+    pub stakes: BTreeMap<[u8; 32], u64>,
+    pub unstaking: BTreeMap<[u8; 32], Vec<UnstakeRequest>>,
 }
 
 impl State {
     pub fn new() -> Self {
         Self {
-            balances: HashMap::new(),
-            nonces: HashMap::new(),
-            stakes: HashMap::new(),
-            unstaking: HashMap::new(),
+            balances: BTreeMap::new(),
+            nonces: BTreeMap::new(),
+            stakes: BTreeMap::new(),
+            unstaking: BTreeMap::new(),
         }
     }
 
@@ -191,7 +193,7 @@ impl ToBytes for State {
         let mut bytes = Vec::new();
 
         // Helper to write a map of [u8; 32] -> u64
-        let write_u64_map = |map: &HashMap<[u8; 32], u64>, out: &mut Vec<u8>| {
+        let write_u64_map = |map: &BTreeMap<[u8; 32], u64>, out: &mut Vec<u8>| {
             out.extend_from_slice(&(map.len() as u64).to_be_bytes());
             for (k, v) in map {
                 out.extend_from_slice(k);
@@ -245,7 +247,7 @@ impl FromBytes for State {
         fn read_u64_map(
             bytes: &[u8],
             i: &mut usize,
-            map: &mut HashMap<[u8; 32], u64>
+            map: &mut BTreeMap<[u8; 32], u64>
         ) -> Result<(), &'static str> {
             let len = read_u64(bytes, i)?;
             for _ in 0..len {

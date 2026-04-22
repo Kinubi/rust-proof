@@ -2,6 +2,8 @@ use crate::models::slashing::SlashProof;
 use crate::traits::{ Hashable, ToBytes };
 use crate::models::transaction::Transaction;
 use ed25519_dalek::{ Signature, VerifyingKey };
+use alloc::vec::Vec;
+use alloc::vec;
 
 use serde_derive::{ Serialize, Deserialize };
 

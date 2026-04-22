@@ -1,5 +1,7 @@
 use sha2::{ Digest, Sha256 };
 use ed25519_dalek::VerifyingKey;
+use alloc::vec::Vec;
+use alloc::vec;
 
 /// A trait for converting a type into a flat array of bytes.
 /// This is essential for hashing and network transmission.
@@ -27,7 +29,7 @@ impl ToBytes for u64 {
     }
 }
 
-impl ToBytes for String {
+impl ToBytes for &'static str {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         let len = self.len() as u64;
@@ -94,7 +96,7 @@ mod tests {
 
     #[test]
     fn test_string_to_bytes() {
-        let s = String::from("hello");
+        let s = "hello";
         let bytes = s.to_bytes();
         // Length of "hello" is 5. So first 8 bytes should be 5.
         let mut expected = vec![0, 0, 0, 0, 0, 0, 0, 5];
