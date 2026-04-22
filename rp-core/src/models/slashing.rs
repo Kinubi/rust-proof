@@ -2,6 +2,8 @@ use crate::{ models::block::Block, traits::ToBytes };
 use ed25519_dalek::VerifyingKey;
 use serde::{ Deserialize, Serialize };
 use crate::traits::Hashable;
+use alloc::vec::Vec;
+use crate::errors::SlashError;
 
 /// A cryptographic proof that a validator signed two different blocks for the same slot.
 /// This is a slashable offense (equivocation).
@@ -13,38 +15,28 @@ pub struct SlashProof {
 }
 
 impl SlashProof {
-    /// Verifies that the slash proof is valid.
-    /// A valid proof must show that the same validator signed two different blocks
-    /// for the exact same slot.
-    pub fn is_valid(&self) -> bool {
+    pub fn validate(&self) -> Result<(), SlashError> {
         if self.block_a.slot != self.block_b.slot {
-            println!("Invalid proof: blocks are from different slots");
-            return false;
+            return Err(SlashError::DifferentSlots);
         }
         if self.block_a.hash() == self.block_b.hash() {
-            println!("Invalid proof: blocks are identical");
-            return false;
+            return Err(SlashError::IdenticalBlocks);
         }
         if self.block_a.validator != self.validator {
-            println!("Invalid proof: block_a validator does not match proof validator");
-            return false;
+            return Err(SlashError::ValidatorMismatchA);
         }
         if self.block_b.validator != self.validator {
-            println!("Invalid proof: block_b validator does not match proof validator");
-            return false;
+            return Err(SlashError::ValidatorMismatchB);
         }
         if !self.block_a.is_valid() {
-            println!("Invalid proof: block_a signature is invalid");
-            return false;
+            return Err(SlashError::InvalidBlockA);
         }
         if !self.block_b.is_valid() {
-            println!("Invalid proof: block_b signature is invalid");
-            return false;
+            return Err(SlashError::InvalidBlockB);
         }
-        true
+        Ok(())
     }
 }
-
 impl ToBytes for SlashProof {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
@@ -60,6 +52,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{ SigningKey, Signer };
     use rand::rngs::OsRng;
+    use alloc::vec;
     // Add tests here to verify that valid slash proofs pass and invalid ones fail!
     #[test]
     fn test_valid_slash_proof() {
@@ -104,6 +97,6 @@ mod tests {
             block_a,
             block_b,
         };
-        assert!(proof.is_valid());
+        assert!(proof.validate().is_ok());
     }
 }

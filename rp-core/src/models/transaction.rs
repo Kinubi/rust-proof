@@ -4,7 +4,6 @@ use serde::{ Deserialize, Serialize };
 use crate::models::slashing::SlashProof;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
-use alloc::vec;
 
 /// A transaction represents a transfer of value from one account to another.
 #[derive(Debug, Clone, Serialize, Deserialize)]

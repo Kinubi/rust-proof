@@ -3,7 +3,6 @@ use crate::traits::{ Hashable, ToBytes };
 use crate::models::transaction::Transaction;
 use ed25519_dalek::{ Signature, VerifyingKey };
 use alloc::vec::Vec;
-use alloc::vec;
 
 use serde_derive::{ Serialize, Deserialize };
 
@@ -75,6 +74,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{ SigningKey, Signer };
     use rand::rngs::OsRng;
+    use alloc::vec;
 
     #[test]
     fn test_block_signing_and_verification() {

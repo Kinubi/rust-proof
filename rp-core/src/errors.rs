@@ -5,6 +5,16 @@ pub enum BlockError {
     InvalidSlot,
     InvalidValidator,
     InvalidTransaction,
-    InvalidSlashProof,
+    InvalidSlashProof(SlashError),
     InvalidStateRoot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlashError {
+    DifferentSlots,
+    IdenticalBlocks,
+    ValidatorMismatchA,
+    ValidatorMismatchB,
+    InvalidBlockA,
+    InvalidBlockB,
 }

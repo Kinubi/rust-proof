@@ -2,7 +2,7 @@ use ed25519_dalek::VerifyingKey;
 use crate::models::slashing::SlashProof;
 use crate::models::transaction::{ Transaction, TransactionData, UnstakeRequest };
 use crate::traits::{ ToBytes, FromBytes, Hashable };
-use crate::errors::BlockError;
+use crate::errors::SlashError;
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::collections::BTreeMap;
@@ -72,7 +72,7 @@ impl State {
             }
             TransactionData::Slash { proof } => {
                 // Slash transactions should be validated separately, but we can check the proof here as well
-                if !proof.is_valid() {
+                if !proof.validate().is_ok() {
                     return false;
                 }
             }
@@ -175,17 +175,15 @@ impl State {
             .unwrap_or([0u8; 32]) // Placeholder: In a real implementation, this would be a Merkle root of the state.
     }
 
-    pub fn apply_slash(&mut self, proof: SlashProof) -> Result<(), BlockError> {
-        if proof.is_valid() {
-            let validator_key_bytes = proof.validator.to_bytes();
-            let mut validator_key_array = [0u8; 32];
-            validator_key_array.copy_from_slice(&validator_key_bytes);
-            self.stakes.remove(&validator_key_array);
-            self.unstaking.remove(&validator_key_array);
-            Ok(())
-        } else {
-            Err(BlockError::InvalidSlashProof)
-        }
+    pub fn apply_slash(&mut self, proof: SlashProof) -> Result<(), SlashError> {
+        let _ = proof.validate()?;
+
+        let validator_key_bytes = proof.validator.to_bytes();
+        let mut validator_key_array = [0u8; 32];
+        validator_key_array.copy_from_slice(&validator_key_bytes);
+        self.stakes.remove(&validator_key_array);
+        self.unstaking.remove(&validator_key_array);
+        Ok(())
     }
 }
 

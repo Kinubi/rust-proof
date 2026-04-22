@@ -1,7 +1,6 @@
 use sha2::{ Digest, Sha256 };
 use ed25519_dalek::VerifyingKey;
 use alloc::vec::Vec;
-use alloc::vec;
 
 /// A trait for converting a type into a flat array of bytes.
 /// This is essential for hashing and network transmission.
@@ -86,6 +85,7 @@ impl<T: ToBytes> Hashable for T {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn test_u64_to_bytes() {

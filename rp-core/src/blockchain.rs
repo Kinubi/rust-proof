@@ -37,7 +37,9 @@ pub fn validate_and_apply_block(
     }
 
     for proof in &block.slash_proofs {
-        next_state.apply_slash(proof.clone())?;
+        if let Err(error) = next_state.apply_slash(proof.clone()) {
+            return Err(BlockError::InvalidSlashProof(error));
+        }
     }
 
     let computed_state_root = next_state.compute_state_root();

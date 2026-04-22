@@ -64,7 +64,7 @@ impl Blockchain {
         }
     }
 
-    pub fn add_block(&mut self, block: Block) -> Result<(), NodeErrors> {
+    pub fn add_block(&mut self, block: Block) -> Result<(), NodeError> {
         let parent_node = self.chain
             .get(&block.previous_hash)
             .ok_or_else(|| "Parent block not found (orphan)".to_string())?;
