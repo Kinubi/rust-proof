@@ -1,36 +1,9 @@
-use crate::models::block::Block;
-use crate::state::State;
-use crate::traits::{ ToBytes, FromBytes, Hashable };
-use std::fmt::Debug;
-use sled;
+use rp_core::models::block::Block;
+use rp_core::state::State;
+use rp_core::traits::{ FromBytes, Hashable, ToBytes };
+use rp_node::storage::Storage;
 
-/// The Storage trait defines the interface for persisting blockchain data.
-/// By using a trait, we can swap out the underlying database (e.g., Sled, RocksDB, or an in-memory mock for testing)
-/// without changing the core Blockchain logic.
-pub trait Storage: Send + Sync {
-    fn save_block(&self, block: &Block) -> Result<(), String>;
-    fn get_block(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String>;
-    fn save_state_root(&self, height: u64, root: &[u8; 32]) -> Result<(), String>;
-    fn save_state_snapshot(&self, block_hash: &[u8; 32], state: &State) -> Result<(), String>;
-    fn get_state_snapshot(&self, block_hash: &[u8; 32]) -> Result<Option<State>, String>;
-}
-
-impl Debug for dyn Storage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Storage")
-    }
-}
-
-impl Clone for Box<dyn Storage> {
-    fn clone(&self) -> Box<dyn Storage> {
-        // Since we can't clone a trait object directly, we can return a new instance of SledStorage.
-        // In a real implementation, you would want to have a more flexible way to clone the storage.
-        // For this example, we'll just create a new SledStorage with a default path.
-        Box::new(SledStorage::new("default_storage_path").unwrap())
-    }
-}
-
-/// A concrete implementation of the Storage trait using the `sled` embedded database.
+/// A concrete runtime storage implementation using the `sled` embedded database.
 pub struct SledStorage {
     db: sled::Db,
 }
@@ -54,6 +27,7 @@ impl Storage for SledStorage {
             Err(e) => Err(format!("Failed to save block: {}", e)),
         }
     }
+
     fn get_block(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String> {
         match self.db.get(hash) {
             Ok(Some(ivec)) => Ok(Some(ivec.to_vec())),
@@ -61,12 +35,14 @@ impl Storage for SledStorage {
             Err(e) => Err(format!("Failed to get block: {}", e)),
         }
     }
+
     fn save_state_root(&self, height: u64, root: &[u8; 32]) -> Result<(), String> {
         match self.db.insert(height.to_be_bytes(), root) {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Failed to save state root: {}", e)),
         }
     }
+
     fn save_state_snapshot(&self, block_hash: &[u8; 32], state: &State) -> Result<(), String> {
         let value = state.to_bytes();
         match self.db.insert(block_hash, value) {
@@ -74,6 +50,7 @@ impl Storage for SledStorage {
             Err(e) => Err(format!("Failed to save state snapshot: {}", e)),
         }
     }
+
     fn get_state_snapshot(&self, block_hash: &[u8; 32]) -> Result<Option<State>, String> {
         match self.db.get(block_hash) {
             Ok(Some(ivec)) => {
@@ -92,18 +69,13 @@ impl Storage for SledStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::block::Block;
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
 
     #[test]
     fn test_sled_storage() {
-        // Create a temporary directory for the test database
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().to_str().unwrap();
-
-        // Uncomment after implementing SledStorage
-        // let storage = SledStorage::new(db_path).unwrap();
 
         let mut csprng = OsRng;
         let validator_keypair = SigningKey::generate(&mut csprng);
@@ -120,8 +92,6 @@ mod tests {
         };
 
         let storage = SledStorage::new(db_path).unwrap();
-
-        // Uncomment after implementing the Storage trait
         storage.save_block(&block).unwrap();
 
         let hash = block.hash();

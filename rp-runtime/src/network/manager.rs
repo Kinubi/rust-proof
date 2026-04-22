@@ -1,5 +1,4 @@
 use libp2p::{
-    Swarm,
     futures::StreamExt,
     gossipsub,
     kad,
@@ -9,16 +8,11 @@ use libp2p::{
     swarm::SwarmEvent,
     tcp,
     yamux,
+    Swarm,
 };
-use crate::network::message::{ NetworkMessage, SyncRequest, SyncResponse };
+use rp_node::network::message::{ NetworkMessage, SyncRequest, SyncResponse };
+use rp_node::node::NodeCommand;
 use tokio::{ select, sync::mpsc };
-use crate::node::NodeCommand;
-
-// ============================================================================
-// TODO: Chapter 8 - Define NetworkBehaviour
-// 1. Define a custom `NetworkBehaviour` struct using #[derive(NetworkBehaviour)]
-//    that combines gossipsub, kademlia, and request_response.
-// ============================================================================
 
 #[derive(NetworkBehaviour)]
 pub struct AppBehaviour {
@@ -29,10 +23,7 @@ pub struct AppBehaviour {
 
 /// Manages P2P network connections and message broadcasting using libp2p.
 pub struct NetworkManager {
-    // TODO: Chapter 8 - Add the libp2p Swarm here
     swarm: Swarm<AppBehaviour>,
-
-    /// Channel to send commands back to the central Node.
     node_sender: mpsc::Sender<NodeCommand>,
 }
 
@@ -105,16 +96,7 @@ impl NetworkManager {
         }
     }
 
-    /// Starts the libp2p Swarm event loop.
     pub async fn start(&mut self) {
-        // ====================================================================
-        // TODO: Chapter 8 - Implement start
-        // 1. Loop over `swarm.select_next_some().await`.
-        // 2. Handle Gossipsub events (deserialize messages and send to Node).
-        // 3. Handle RequestResponse events (fetch blocks and send back).
-        // 4. Handle Kademlia events (add discovered peers to Gossipsub).
-        // ====================================================================
-
         loop {
             select! {
             event = self.swarm.select_next_some() => match event {
@@ -153,7 +135,7 @@ impl NetworkManager {
                                             self.node_sender.send(NodeCommand::GetBlocksByHeight {
                                                 from_height: request.from_height,
                                                 to_height: request.to_height,
-                                                responder: responder.0, // TODO: Send response back to peer
+                                                responder: responder.0,
                                             }).await.unwrap();
                                             let blocks = responder.1.await.unwrap().unwrap();
                                             println!("Fetched {} blocks from Node", blocks.len());
@@ -172,8 +154,8 @@ impl NetworkManager {
                         }
                         AppBehaviourEvent::Kademlia(event) => {
                             println!("Received Kademlia event: {:?}", event);
-                        }    
-                             _ => {
+                        }
+                        _ => {
                             println!("Received other event: {:?}", event);
                         }
                     }
@@ -188,23 +170,11 @@ impl NetworkManager {
         }
     }
 
-    /// Broadcasts a transaction to the network via Gossipsub.
     pub async fn broadcast_transaction(&mut self) {
-        // ====================================================================
-        // TODO: Chapter 8 - Implement broadcast_transaction
-        // 1. Serialize the transaction.
-        // 2. Publish the serialized bytes to the "transactions" Gossipsub topic.
-        // ====================================================================
         println!("Broadcasting transaction to network");
     }
 
-    /// Broadcasts a block to the network via Gossipsub.
     pub async fn broadcast_block(&mut self) {
-        // ====================================================================
-        // TODO: Chapter 8 - Implement broadcast_block
-        // 1. Serialize the block.
-        // 2. Publish the serialized bytes to the "blocks" Gossipsub topic.
-        // ====================================================================
         println!("Broadcasting block to network");
     }
 }

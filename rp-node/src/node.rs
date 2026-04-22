@@ -1,9 +1,9 @@
 use crate::blockchain::Blockchain;
-use crate::models::block::Block;
-use crate::models::slashing::SlashProof;
-use crate::models::transaction::{ Transaction };
+use crate::storage::Storage;
+use rp_core::models::block::Block;
+use rp_core::models::slashing::SlashProof;
+use rp_core::models::transaction::Transaction;
 use tokio::sync::{ mpsc, oneshot };
-use crate::storage::{ Storage };
 
 /// Commands that can be sent to the Node to interact with the Blockchain state.
 #[derive(Debug)]
@@ -52,7 +52,6 @@ impl Node {
     }
 
     /// The main loop of the Node. It continuously listens for commands and processes them.
-    /// This function takes ownership of the Node and runs indefinitely.
     pub async fn run(mut self) {
         while let Some(cmd) = self.receiver.recv().await {
             match cmd {
@@ -88,31 +87,56 @@ impl Node {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ SigningKey, Signer };
+    use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
-    use crate::traits::Hashable;
-    use crate::models::transaction::{ Transaction, TransactionData };
-    use tokio::sync::{ oneshot };
-    use crate::storage::{ SledStorage };
+    use rp_core::models::transaction::{ Transaction, TransactionData };
+    use rp_core::state::State;
+    use rp_core::traits::Hashable;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct TestStorage {
+        states: Mutex<HashMap<[u8; 32], State>>,
+    }
+
+    impl Storage for TestStorage {
+        fn save_block(&self, _block: &Block) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn get_block(&self, _hash: &[u8; 32]) -> Result<Option<Vec<u8>>, String> {
+            Ok(None)
+        }
+
+        fn save_state_root(&self, _height: u64, _root: &[u8; 32]) -> Result<(), String> {
+            Ok(())
+        }
+
+        fn save_state_snapshot(&self, block_hash: &[u8; 32], state: &State) -> Result<(), String> {
+            self.states.lock().unwrap().insert(*block_hash, state.clone());
+            Ok(())
+        }
+
+        fn get_state_snapshot(&self, block_hash: &[u8; 32]) -> Result<Option<State>, String> {
+            Ok(self.states.lock().unwrap().get(block_hash).cloned())
+        }
+    }
 
     #[tokio::test]
     async fn test_node_commands() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let storage = Box::new(SledStorage::new(temp_dir.path().to_str().unwrap()).unwrap());
+        let storage = Box::new(TestStorage::default());
         let (node, sender) = Node::new(storage);
 
-        // Spawn the node in a background task
         tokio::spawn(async move {
             node.run().await;
         });
 
-        // Test GetLatestBlock
         let (resp_tx, resp_rx) = oneshot::channel();
         sender.send(NodeCommand::GetLatestBlock { responder: resp_tx }).await.unwrap();
         let latest_block = resp_rx.await.unwrap();
-        assert_eq!(latest_block.height, 0); // Genesis block
+        assert_eq!(latest_block.height, 0);
 
-        // Test AddTransaction
         let mut csprng = OsRng;
         let sender_keypair = SigningKey::generate(&mut csprng);
         let receiver_keypair = SigningKey::generate(&mut csprng);
@@ -131,12 +155,10 @@ mod tests {
         tx.signature = Some(sender_keypair.sign(&hash[..]));
 
         let (resp_tx, resp_rx) = oneshot::channel();
-        // We use a dummy command here just to make the test compile while you implement the enum
         sender
             .send(NodeCommand::AddTransaction { transaction: tx.clone(), responder: resp_tx }).await
             .unwrap();
 
-        // It should fail because the sender has no balance in the genesis state
         let result = resp_rx.await.unwrap();
         assert!(result.is_err());
     }
