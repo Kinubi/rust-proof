@@ -6,6 +6,8 @@ edition = "2024"
 rust-version = "1.95"
 publish = false
 
+[workspace]
+
 [[bin]]
 name = "erp-runtime"
 harness = false # do not use the built-in cargo test harness -> resolve rust-analyzer errors
@@ -25,10 +27,25 @@ futures = "0.3.32"
 embuild = "0.33"
 
 [package.metadata.esp-idf-sys]
-esp_idf_sdkconfig_defaults = ["erp-runtime/sdkconfig.defaults"]
+mcu = "esp32p4"
+esp_idf_version = "v6.0"
+esp_idf_tools_install_dir = "workspace"
+esp_idf_sdkconfig_defaults = ["sdkconfig.defaults"]
 
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_wifi_remote", version = "1.5.1" }
 [[package.metadata.esp-idf-sys.extra_components]]
 remote_component = { name = "espressif/esp_hosted", version = "2.12.3" }
 
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[profile.release]
+opt-level = "s"
+
+[patch.crates-io]
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal.git", branch = "master" }
+esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git", branch = "master" }
+esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys.git", branch = "master" }

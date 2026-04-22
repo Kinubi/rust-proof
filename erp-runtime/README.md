@@ -84,3 +84,8 @@ Recommended security model:
 The embedded target configuration for this crate is still target-specific and separate from normal host workflows.
 
 Build from inside this directory with your Wi-Fi credentials when needed.
+
+`esp-idf-sys` is configured to treat `erp-runtime/` as its local workspace for ESP-IDF assets. That keeps ESP downloads and generated files under this crate, primarily in `erp-runtime/.embuild/`, instead of the repository root.
+
+The root `Cargo.toml` is still required because this repository is a Cargo workspace. It is the workspace manifest, not a duplicate package manifest for `erp-runtime`.
+ 

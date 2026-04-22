@@ -5,26 +5,11 @@ members = [
     "rp-node",
     "rp-runtime",
     "rp-client",
-    "erp-runtime",
 ]
 default-members = [
     "rp-core",
     "rp-node",
     "rp-runtime",
     "rp-client",
+
 ]
-
-[profile.dev.package.erp-runtime]
-debug = true
-opt-level = "z"
-
-[profile.release.package.erp-runtime]
-opt-level = "s"
-
-
-
-[patch.crates-io]
-esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal.git", branch = "master" }
-esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git", branch = "master" }
-esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys.git", branch = "master" }
-

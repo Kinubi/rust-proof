@@ -11,7 +11,7 @@ use libp2p::{
     Swarm,
 };
 use rp_node::network::message::{ NetworkMessage, SyncRequest, SyncResponse };
-use rp_node::node::NodeCommand;
+use rp_node::contract::NodeAction;
 use tokio::{ select, sync::mpsc };
 
 #[derive(NetworkBehaviour)]

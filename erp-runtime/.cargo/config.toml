@@ -14,6 +14,10 @@ MCU = "esp32p4"
 ESP_IDF_VERSION = "v6.0"
 ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
 
-# Uncomment this if you have moved the target dir by setting CARGO_TARGET_DIR or similar.
-# Required for now due to embuild limitations.
-#CARGO_WORKSPACE_DIR = { value = "", relative = true }
+# Tell esp-idf-sys/embuild to treat this crate directory as its workspace dir.
+# That keeps .embuild, sdkconfig-relative paths, and component-manager lockfiles
+# local to erp-runtime instead of the repo root.
+CARGO_WORKSPACE_DIR = { value = "", relative = true }
+
+# Uncomment and adjust this only if you later move the Cargo target dir again.
+#CARGO_WORKSPACE_DIR = { value = "..", relative = true }

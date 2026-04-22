@@ -1,4 +1,4 @@
-use rp_node::node::Node;
+use rp_node::node_engine::Node;
 use rp_runtime::storage::SledStorage;
 
 #[tokio::main]
@@ -12,7 +12,7 @@ async fn main() {
 
     let responder = tokio::sync::oneshot::channel();
     sender
-        .send(rp_node::node::NodeCommand::GetLatestBlock { responder: responder.0 }).await
+        .send(rp_node::node_engine::NodeCommand::GetLatestBlock { responder: responder.0 }).await
         .unwrap();
 
     println!("Latest block: {:?}", responder.1.await.unwrap());
