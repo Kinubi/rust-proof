@@ -1,8 +1,10 @@
 use crate::traits::{ Hashable, ToBytes };
 use ed25519_dalek::{ Signature, VerifyingKey };
 use serde::{ Deserialize, Serialize };
-use std::cmp::Ordering;
 use crate::models::slashing::SlashProof;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use alloc::vec;
 
 /// A transaction represents a transfer of value from one account to another.
 #[derive(Debug, Clone, Serialize, Deserialize)]
