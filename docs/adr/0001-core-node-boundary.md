@@ -1,155 +1,135 @@
-# ADR 0001: Core Engine and Host Runtime Boundary
+# ADR 0001: Shared Engine and Multi-Runtime Boundary
 
 - Status: Accepted
 - Date: 2026-04-22
 
 ## Context
 
-The workspace already has the correct product split at a high level:
+The project needs to support all of the following simultaneously:
 
-- `rust-proof-core/` contains blockchain logic, storage, networking, and the current node binary
-- `rust-proof-client/` is the PC client scaffold
-- `erp-client/` is the embedded client scaffold
+- one canonical blockchain engine
+- one canonical node engine
+- a desktop or server runtime that can host a node
+- an embedded runtime that can host a node
+- a separate wallet and operator application
 
-The problem is that `rust-proof-core/` is currently a mixed crate. It contains both deterministic blockchain logic and host-only runtime concerns such as:
+The previous architecture assumptions were too host-centric and treated the embedded side as a lighter client tier. That does not match the intended direction. The ESP must be able to participate as a first-class peer.
 
-- `tokio` actor orchestration
-- persistent storage via `sled`
-- `libp2p` networking
-- the binary entry point
-
-That mixed boundary blocks the planned `no_std` migration, because only the deterministic blockchain engine should move to `no_std`. The host runtime must stay `std`-based.
+At the same time, the project should avoid duplicating node behavior across desktop and embedded codebases.
 
 ## Decision
 
-We split responsibilities as follows.
+The target architecture is a five-crate model.
 
-### `rust-proof-core`
+### `rp-core`
 
-`rust-proof-core` is the deterministic blockchain engine crate.
+`rp-core` is the blockchain engine.
 
-It owns:
+It is intended to be `no_std + alloc` and owns:
 
-- transaction, block, and slash-proof models
-- canonical binary encoding and hashing
-- signature verification logic
-- mempool ordering rules
-- ledger state transition logic
-- validator selection logic
-- block validation logic
-- state-root computation
-- typed consensus and validation errors
+- consensus rules
+- state transition
+- canonical encoding
+- hashing
+- validation
+- typed consensus errors
 
-It does not own:
+### `rp-node`
 
-- process startup
-- async runtimes
-- channels or actor orchestration
-- filesystem or database access
-- network sockets or peer discovery
-- JSON-RPC or external transport concerns
+`rp-node` is the device-agnostic node engine.
 
-`no_std` applies to this engine crate only.
+It is intended to be `no_std + alloc` and owns:
 
-### `rust-proof-node`
+- peer state machines
+- sync logic
+- mempool policy
+- import orchestration
+- message handling
+- runtime boundary traits for transport, storage, clock, wake, and identity
 
-`rust-proof-node` is the host runtime crate.
+### `rp-runtime`
 
-It owns:
+`rp-runtime` is the desktop or server runtime that hosts `rp-node`.
 
-- the binary entry point
-- `tokio` runtime orchestration
-- node command handling and actor wiring
-- persistent storage adapters
-- `libp2p` networking and sync
-- RPC and host-facing APIs
-- observability and operator runtime concerns
+It is `std`-based and owns:
 
-It depends on `rust-proof-core` for all consensus-critical validation and state transition behavior.
+- transport integration
+- storage integration
+- process lifecycle
+- observability
+- optional local APIs and optional wallet web hosting
 
-### `rust-proof-client`
+### `erp-runtime`
 
-`rust-proof-client` is the desktop client crate.
+`erp-runtime` is the embedded runtime that hosts `rp-node`.
 
-It owns:
+It is target-specific and owns:
 
-- wallet and key management for desktop workflows
-- transaction construction and signing
-- RPC interaction with `rust-proof-node`
-- operator and developer CLI flows
+- embedded transport integration
+- embedded storage integration
+- timers and wakeups
+- device identity integration
+- optional on-device wallet web hosting
 
-It must not reimplement consensus-critical validation logic that can drift from `rust-proof-core`.
+### `rp-client`
 
-### `erp-client`
+`rp-client` is the wallet and operator application.
 
-`erp-client` is the embedded client crate.
+It is `std`-based and owns:
 
-For the first release it is a signer and light client, not a full node.
-
-It owns:
-
-- device connectivity and retry logic
-- device identity and signing
-- compact protocol interaction with a host node
-- limited verification such as headers, checkpoints, or compact proofs where feasible
-
-It does not attempt:
-
-- full archival storage
-- full host-node feature parity
-- full embedded swarm participation in the first release
+- wallet UX
+- operator CLI
+- transaction construction and signing flows
+- optional static web assets that may be served by a runtime
 
 ## Consequences
 
-### Immediate consequences
+### Architectural consequences
 
-- the package currently named `rust-proof` inside `rust-proof-core/Cargo.toml` should be renamed to `rust-proof-core`
-- a new `rust-proof-node` crate should be added before major feature work continues
-- the current `src/main.rs`, `node.rs`, `storage.rs`, and `network/` code paths must move out of the future core crate
+- node logic is shared once in `rp-node`
+- blockchain logic is shared once in `rp-core`
+- desktop and embedded peers are differentiated by runtime adapters, not by duplicated protocol logic
+- wallet functionality remains outside the node engines
 
-### Development consequences
+### Repository consequences
 
-- feature work in consensus, state transition, and canonical encoding belongs in `rust-proof-core`
-- feature work in networking, storage, RPC, and process orchestration belongs in `rust-proof-node`
-- client-facing protocol types should be shared explicitly rather than copied between clients
-- the embedded client should target stable node-facing protocols instead of depending on internal host-node details
+The current repository names are transitional.
 
-### Migration consequences
+Target mapping:
 
-The implementation order is:
+- current `rust-proof-core/` splits into `rp-core` and `rp-node`
+- current `rust-proof-node/` becomes `rp-runtime`
+- current `rust-proof-client/` becomes `rp-client`
+- current `erp-client/` becomes `erp-runtime`
 
-1. rename the core package so package identity matches responsibility
-2. add `rust-proof-node` as a host runtime crate
-3. move the binary entry point into `rust-proof-node`
-4. move actor, storage, and networking concerns into `rust-proof-node`
-5. extract a pure engine API inside `rust-proof-core`
-6. migrate that engine API to `no_std`
+### Implementation consequences
+
+Immediate refactor priorities are:
+
+1. isolate blockchain engine logic from runtime concerns
+2. isolate node engine logic from runtime concerns
+3. define the trait and event boundary used by runtimes
+4. keep runtime shells thin and target-specific
 
 ## Alternatives considered
 
-### Make the entire node `no_std`
+### Keep a host-only node runtime as the canonical node
 
 Rejected.
 
-That would force networking, storage, async orchestration, and host integrations into a target they do not fit. It also does not match the actual product split in this workspace.
+That would make the embedded side a second-class participant and would duplicate node behavior across device classes.
 
-### Keep one mixed crate and use feature flags
+### Make the full runtime itself device-agnostic
 
 Rejected.
 
-That would hide the boundary instead of fixing it. The runtime and engine responsibilities would remain coupled, making both testing and the later `no_std` migration harder.
+The shared part should be the node engine, not the concrete runtime shell. Transport stacks, storage backends, timers, and process control remain platform-specific.
 
-## First-release scope implied by this decision
+## Scope implied by this decision
 
-The first release targets:
+Version `0.1` should prove that:
 
-- one or more host nodes running the blockchain runtime
-- a PC client that can create keys, sign, submit, and query
-- an embedded client that can authenticate, sign, submit, and verify a compact chain view
-
-The first release does not target:
-
-- embedded full-node behavior
-- advanced smart contracts
-- privacy systems
-- advanced interoperability or governance features
+- the same blockchain engine works across runtimes
+- the same node engine works across runtimes
+- desktop and embedded runtimes can both host real peers
+- the wallet remains a separate application layer
