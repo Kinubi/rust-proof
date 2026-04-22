@@ -13,7 +13,8 @@ Move the repository from a mixed host-centric shape toward this target:
 - `erp-runtime`
 - `rp-client`
 
-Phase 1 is about creating honest boundaries. It is not about finishing the full implementation.
+Phase 1 is about creating honest boundaries and making the shared engines truly `no_std + alloc`.
+It is not about rewriting runtimes or finishing the full implementation.
 
 ## What Phase 1 Must Achieve
 
@@ -22,6 +23,7 @@ By the end of Phase 1, the project should have:
 - frozen docs and naming for the new architecture
 - a clear split between blockchain engine and node engine responsibilities
 - a clear split between shared node behavior and runtime-specific code
+- an explicit constraint that `rp-core` and `rp-node` remain `no_std + alloc` shared engines
 - a clear position for the wallet as a separate application layer
 
 ## Working Decisions
@@ -34,15 +36,25 @@ These are fixed for Phase 1.
 4. `rp-client` is the wallet and operator application.
 5. The wallet may later ship web assets, but wallet UX is not part of the node engine.
 
+## Shared Engine Constraint
+
+The Phase 1 split must preserve the target execution model of the shared engines:
+
+- `rp-core` stays `no_std + alloc`
+- `rp-node` stays `no_std + alloc`
+- transport, storage drivers, async runtimes, process lifecycle, and target-specific integration stay in `rp-runtime/` or `erp-runtime/`
+
+If a Phase 1 boundary decision would force `std` into `rp-core` or `rp-node`, that is a sign the boundary is wrong.
+
 ## Definition Of Done For Phase 1
 
 Phase 1 is done when all of the following are true:
 
 - the architecture docs all agree on the five-crate model
 - the current mixed crate has a concrete extraction plan for `rp-core` and `rp-node`
-- the placeholder desktop runtime has a clear target role as `rp-runtime`
-- the embedded runtime has a clear target role as `erp-runtime`
-- the wallet crate has a clear target role as `rp-client`
+- the shared-engine path no longer depends on transport, storage drivers, async runtimes, or process lifecycle
+- `rp-core` and `rp-node` have a concrete `no_std + alloc` conversion path and first implementation slices
+- the runtime rewrites and wallet/application follow-on work are explicitly deferred to Phase 2
 
 ## Phase 1 Execution Order
 
@@ -51,7 +63,6 @@ Phase 1 is done when all of the following are true:
 ### Outcome
 
 - system design doc
-- updated ADR
 - updated roadmap
 - updated root and crate READMEs
 
@@ -95,73 +106,61 @@ Write down the actual runtime boundary before moving large amounts of code.
 
 Without this step, the runtime split will collapse into ad hoc callbacks and duplicated logic.
 
-## Step 3. Fill In `rp-runtime/`
+## Step 3. Convert The Shared Engines To `no_std + alloc`
 
 ### Objective
 
-Treat the current `rp-runtime/` crate as the host runtime shell, not as the canonical node engine.
+Remove `std` assumptions from the future shared-engine path before any runtime rewrite begins.
 
-### Constraints
+### Deliverables
 
-- keep host runtime logic out of the future shared node engine
-- avoid putting protocol or consensus logic into the runtime shell
+- identify the `std`-bound APIs and dependencies still leaking into `rp-core` and `rp-node`
+- replace shared-engine assumptions with `alloc`-friendly data structures and boundaries where required
+- push host and embedded integration details back behind runtime traits or event boundaries
+- define the first compile and validation path for shared-engine code that must stay runtime-agnostic
 
-## Step 4. Evolve `erp-runtime/`
+### Why this matters
 
-### Objective
+Without this step, runtime work will drag host assumptions back into the shared engines and make the split dishonest.
 
-Treat the embedded crate as the embedded node runtime rather than as a simple client shell.
-
-### Responsibilities to document and then implement
-
-- transport integration
-- storage integration
-- timing and wake integration
-- identity management
-- bounded memory policy
-- optional local web-wallet hosting later
-
-## Step 5. Evolve `rp-client/`
+## Step 4. Create The First Extraction Plan
 
 ### Objective
 
-Keep the wallet and operator workflows out of the node engines.
-
-### Responsibilities
-
-- wallet UX
-- CLI or operator commands
-- transaction construction and signing
-- interaction with runtimes
-- optional web-wallet build target later
-
-## Step 6. Create The First Extraction Plan
-
-### Objective
-
-After the role boundaries are clear, identify the first safe code movement slices.
+After the role boundaries and `no_std` constraints are clear, identify the first safe code movement slices.
 
 ### Recommended slices
 
 1. move `main.rs` out of the future engine path
 2. isolate storage adapters from blockchain logic
 3. isolate peer and sync logic from runtime glue
-4. define the node event and action boundary
+4. remove `std`-bound shared-engine assumptions as each slice moves
+
+## Deferred To Phase 2
+
+The following work is intentionally not part of Phase 1:
+
+- rewrite `erp-runtime/` around the shared node engine
+- rewrite `rp-runtime/` around the shared node engine
+- evolve `rp-client/` beyond role-definition and interface planning
+- compatibility, hardening, and later application-layer work
 
 ## The First Real Coding Task After Phase 1 Docs
 
 Once the docs are accepted, the highest-leverage coding task is:
 
-**Split the current `rp-core/` code into blockchain-engine concerns and node-engine concerns before doing any runtime-specific feature work.**
+**Split the current `rp-core/` code into blockchain-engine concerns and node-engine concerns, then remove `std` dependencies from the future shared-engine path before doing any runtime-specific feature work.**
 
 That is the move that makes every later crate boundary honest.
 
 ## Things Not To Do In Phase 1
 
 - do not add more host-only logic to the mixed crate
+- do not rewrite `erp-runtime/` yet
+- do not rewrite `rp-runtime/` yet
 - do not make embedded networking decisions the definition of the node engine
 - do not move wallet UX into the node engines
-- do not create a separate web-wallet crate yet unless `rp-client` becomes too large
+- do not evolve `rp-client/` beyond role and interface planning yet
 - do not bind `rp-node` to a specific transport framework too early
 
 ## Phase 1 Success Signal

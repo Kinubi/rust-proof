@@ -88,15 +88,18 @@ This roadmap describes the target model, not the current implementation state.
 
 ## 5. Delivery Strategy
 
-The roadmap is organized as seven milestones.
+The roadmap is organized as seven milestones across two execution phases.
+
+- Phase 1: M0 through M2, plus the separation and `no_std + alloc` conversion work needed to make `rp-core` and `rp-node` honest shared engines
+- Phase 2: M3 through M6, starting with the `erp-runtime/` and `rp-runtime/` rewrites and continuing through `rp-client` and compatibility work
 
 | Window | Milestone | Main outcome |
 | --- | --- | --- |
 | Late April 2026 | M0 | Architecture freeze and naming freeze |
 | May 2026 | M1 | Extract `rp-core` and define `rp-node` boundaries |
 | May to June 2026 | M2 | Implement the shared `rp-node` engine boundary |
-| June to July 2026 | M3 | Build `rp-runtime` around the node engine |
-| July to August 2026 | M4 | Build `erp-runtime` around the same node engine |
+| June to July 2026 | M3 | Build `erp-runtime` around the node engine |
+| July to August 2026 | M4 | Build `rp-runtime` around the same node engine |
 | August to September 2026 | M5 | Build `rp-client` wallet and operator flows |
 | September to October 2026 | M6 | Compatibility, hardening, and end-to-end testnet |
 
@@ -111,7 +114,6 @@ Freeze the final crate model and stop further design drift.
 ### Deliverables
 
 - accepted architecture docs
-- accepted ADR
 - clear mapping from current directories to target crates
 - explicit agreement that `rp-client` is a wallet app and both desktop and embedded runtimes can host nodes
 
@@ -131,6 +133,7 @@ Separate blockchain rules from node behavior inside the current mixed codebase.
 - isolate blockchain engine concerns inside the current `rp-core/` tree
 - define what belongs in the future `rp-node`
 - identify all runtime-coupled code paths in the current mixed crate
+- identify and remove `std`-bound assumptions from the future shared-engine surfaces
 - move validation and state transition logic behind a smaller engine boundary
 - remove direct storage ownership from engine logic
 
@@ -161,6 +164,7 @@ Create the device-agnostic node engine boundary.
 - define the node output and action model
 - define runtime-facing boundaries for transport, storage, clock, wake, and identity
 - move peer state, sync state, import orchestration, and mempool admission into the node engine layer
+- convert shared-engine paths to `no_std + alloc` friendly abstractions where needed
 - keep concrete runtime integration out of the shared node engine
 
 ### Recommended design style
@@ -188,30 +192,9 @@ Outputs:
 - `rp-node` can be reasoned about without reference to OS sockets or ESP drivers
 - the node engine can drive both a host runtime and an embedded runtime in principle
 
-## M3. Build `rp-runtime`
+The remaining milestones are Phase 2 work. Runtime rewrites begin here.
 
-### Objective
-
-Create the desktop or server runtime that hosts `rp-node`.
-
-### Tasks
-
-- evolve `rp-runtime/` from a crate skeleton into the real host runtime
-- wire host transport integration into the node engine boundary
-- wire host storage integration into the node engine boundary
-- provide process lifecycle, logging, and metrics
-- optionally add local control APIs and local wallet web hosting later
-
-### Runtime policy
-
-- runtime-specific code must stay out of `rp-node`
-- runtime should be replaceable without changing node logic
-
-### Exit criteria
-
-- a desktop or server process can host a peer node through the shared node engine
-
-## M4. Build `erp-runtime`
+## M3. Build `erp-runtime`
 
 ### Objective
 
@@ -233,6 +216,29 @@ The embedded runtime is a first-class peer runtime, but it is not required to be
 ### Exit criteria
 
 - the embedded runtime can host a real peer using the same node engine as the desktop runtime
+
+## M4. Build `rp-runtime`
+
+### Objective
+
+Create the desktop or server runtime that hosts `rp-node`.
+
+### Tasks
+
+- evolve `rp-runtime/` from a crate skeleton into the real host runtime
+- wire host transport integration into the node engine boundary
+- wire host storage integration into the node engine boundary
+- provide process lifecycle, logging, and metrics
+- optionally add local control APIs and local wallet web hosting later
+
+### Runtime policy
+
+- runtime-specific code must stay out of `rp-node`
+- runtime should be replaceable without changing node logic
+
+### Exit criteria
+
+- a desktop or server process can host a peer node through the shared node engine
 
 ## M5. Build `rp-client`
 

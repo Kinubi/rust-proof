@@ -15,9 +15,9 @@ The target crate model is:
 - `erp-runtime`
 - `rp-client`
 
-Only the wallet application is intentionally `std`-bound by default. The blockchain engine and node engine are intended to be `no_std + alloc` so they can run in both server-class and embedded runtimes.
+The shared engines are intended to be `no_std + alloc` so they can run in both server-class and embedded runtimes. Runtime crates remain environment-specific.
 
-This document describes the target system design. It is intentionally more detailed than the ADR and more stable than implementation notes.
+This document describes the target system design. It is intentionally stable enough to guide the refactor rather than day-to-day implementation notes.
 
 ## 2. Design Goals
 
@@ -374,15 +374,19 @@ This gives the project freedom to:
 
 ## 12. Migration Strategy
 
+Phase 1 ends after the shared-engine separation and `no_std + alloc` conversion work.
+Runtime rewrites and later application work begin in Phase 2.
+
 The migration from the current repository should happen in this order:
 
 1. finish the architecture rewrite and freeze the target crate model
 2. reduce `rp-core/` until the blockchain engine is isolated
 3. extract the device-agnostic node engine out of the current mixed runtime code
-4. fill in `rp-runtime/` as the host runtime shell
-5. evolve `erp-runtime/` into the embedded runtime shell
-6. evolve `rp-client/` into the wallet application
-7. move protocol and runtime interfaces to the correct crates only after the seams are stable
+4. convert shared-engine paths in `rp-core` and `rp-node` to `no_std + alloc`
+5. Phase 2: evolve `erp-runtime/` into the embedded runtime shell
+6. Phase 2: fill in `rp-runtime/` as the host runtime shell
+7. Phase 2: evolve `rp-client/` into the wallet application
+8. Phase 2: move protocol and runtime interfaces to the correct crates only after the seams are stable
 
 ## 13. Design Rules
 
