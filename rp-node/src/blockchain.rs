@@ -3,6 +3,7 @@ use crate::storage::Storage;
 use rp_core::models::block::{ Block, BlockNode };
 use rp_core::models::transaction::Transaction;
 use rp_core::state::State;
+use rp_core::blockchain::{ validate_and_apply_block, should_replace_head };
 use rp_core::traits::{ Hashable };
 use std::collections::HashMap;
 
@@ -61,96 +62,51 @@ impl Blockchain {
         }
     }
 
-    fn calculate_chain_weight(&self, tip_hash: &[u8; 32]) -> u64 {
-        let mut weight = 0;
-        let mut current_hash = *tip_hash;
-
-        while let Some(node) = self.chain.get(&current_hash) {
-            let validator_bytes = node.block.validator.to_bytes();
-            let mut key_array = [0u8; 32];
-            key_array.copy_from_slice(&validator_bytes);
-
-            weight += self.state.stakes.get(&key_array).unwrap_or(&1);
-
-            if node.block.height == 0 {
-                break;
-            }
-            current_hash = node.block.previous_hash;
-        }
-        weight
-    }
-
     pub fn add_block(&mut self, block: Block) -> Result<(), String> {
-        if !block.is_valid() {
-            return Err("Invalid block signature".to_string());
-        }
-
         let parent_node = self.chain
             .get(&block.previous_hash)
             .ok_or_else(|| "Parent block not found (orphan)".to_string())?;
         let parent_block = &parent_node.block;
 
-        if block.height != parent_block.height + 1 {
-            return Err("Invalid block height".to_string());
-        }
-        if block.slot <= parent_block.slot {
-            return Err("Block slot must be greater than the parent block's slot".to_string());
-        }
-
-        let mut temp_state = self.storage
+        let parent_state = self.storage
             .get_state_snapshot(&block.previous_hash)?
             .ok_or_else(|| "Parent state snapshot not found".to_string())?;
 
-        if let Some(expected_validator) = temp_state.get_expected_validator(block.height) {
-            if block.validator != expected_validator {
-                return Err("Invalid block validator".to_string());
-            }
-        }
-
-        for tx in &block.transactions {
-            if !temp_state.is_valid_tx(tx) {
-                return Err("Invalid transaction in block".to_string());
-            }
-            temp_state.apply_tx(tx, block.slot);
-        }
-
-        for proof in &block.slash_proofs {
-            if let Err(e) = temp_state.apply_slash(proof.clone()) {
-                return Err(format!("Invalid slash proof: {}", e));
-            }
-        }
-
-        let computed_state_root = temp_state.compute_state_root();
-        if block.state_root != computed_state_root {
-            return Err("Invalid state root".to_string());
-        }
-
+        let applied_block = validate_and_apply_block(parent_block, &parent_state, &block)?;
         let block_hash = block.hash();
 
         if let Err(e) = self.storage.save_block(&block) {
             return Err(format!("Failed to save block to storage: {}", e));
         }
-        if let Err(e) = self.storage.save_state_snapshot(&block_hash, &temp_state) {
+        if let Err(e) = self.storage.save_state_snapshot(&block_hash, &applied_block.next_state) {
             return Err(format!("Failed to save state snapshot: {}", e));
         }
 
         if let Some(parent_node_mut) = self.chain.get_mut(&block.previous_hash) {
-            parent_node_mut.children.push(block_hash);
+            if !parent_node_mut.children.contains(&block_hash) {
+                parent_node_mut.children.push(block_hash);
+            }
         }
-        self.chain.insert(block_hash, BlockNode { block: block.clone(), children: vec![] });
+        self.chain.entry(block_hash).or_insert_with(|| BlockNode {
+            block: block.clone(),
+            children: vec![],
+        });
 
-        let new_chain_weight = self.calculate_chain_weight(&block_hash);
-        let current_chain_weight = self.calculate_chain_weight(&self.head_hash);
+        let replace_head = should_replace_head(
+            &block_hash,
+            &block,
+            self.get_latest_block(),
+            self.head_hash
+        );
 
-        if new_chain_weight > current_chain_weight {
+        if replace_head {
             self.head_hash = block_hash;
-            self.state = temp_state;
+            self.state = applied_block.next_state;
 
             for tx in &block.transactions {
                 self.mempool.remove_transaction(&tx.hash());
             }
         }
-
         Ok(())
     }
 
@@ -327,5 +283,49 @@ mod tests {
         good_block.signature = Some(correct_validator.sign(&good_hash[..]));
 
         assert!(blockchain.add_block(good_block).is_ok());
+    }
+
+    #[test]
+    fn test_higher_slot_wins_same_height_fork() {
+        let mut csprng = OsRng;
+        let validator1 = SigningKey::generate(&mut csprng);
+        let validator2 = SigningKey::generate(&mut csprng);
+
+        let mut blockchain = Blockchain::new(Box::new(TestStorage::default()));
+        let parent = blockchain.get_latest_block().clone();
+        let state_root = blockchain.state.compute_state_root();
+
+        let mut block_a = Block {
+            height: 1,
+            slot: 1,
+            previous_hash: parent.hash(),
+            validator: validator1.verifying_key(),
+            transactions: vec![],
+            signature: None,
+            slash_proofs: vec![],
+            state_root,
+        };
+        let block_a_hash = block_a.hash();
+        block_a.signature = Some(validator1.sign(&block_a_hash[..]));
+
+        let mut block_b = Block {
+            height: 1,
+            slot: 2,
+            previous_hash: parent.hash(),
+            validator: validator2.verifying_key(),
+            transactions: vec![],
+            signature: None,
+            slash_proofs: vec![],
+            state_root,
+        };
+        let block_b_hash = block_b.hash();
+        block_b.signature = Some(validator2.sign(&block_b_hash[..]));
+
+        assert!(blockchain.add_block(block_a).is_ok());
+        assert_eq!(blockchain.head_hash, block_a_hash);
+
+        assert!(blockchain.add_block(block_b).is_ok());
+        assert_eq!(blockchain.head_hash, block_b_hash);
+        assert_eq!(blockchain.get_latest_block().slot, 2);
     }
 }
