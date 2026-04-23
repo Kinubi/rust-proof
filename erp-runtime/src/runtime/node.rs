@@ -1,10 +1,9 @@
 use futures::{ SinkExt, StreamExt };
 use rp_core::models::block::Block;
-use rp_node::errors::NodeError;
 use rp_node::node_engine::{ NodeEngine };
 use rp_node::contract::{ BlockHash, NodeAction, NodeInput, PeerId };
 use futures::channel::mpsc;
-use log::{ info, warn };
+use log::info;
 
 use crate::runtime::errors::RuntimeError;
 

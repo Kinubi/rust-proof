@@ -1,10 +1,11 @@
-use futures::{ SinkExt, TryFutureExt };
-use rp_core::{ models::block::Block, traits::ToBytes };
-use rp_node::{ blockchain, contract::PeerId, network::message::NetworkMessage };
+use futures::{ SinkExt, StreamExt };
+use log::info;
+use rp_node::contract::PeerId;
 
-use log::{ info, warn };
-
-use crate::{ network::errors::NetworkError, runtime::node::{ EventTx, NetworkRx, RuntimeEvent } };
+use crate::{
+    network::errors::NetworkError,
+    runtime::node::{ EventTx, NetworkCommand, NetworkRx, RuntimeEvent },
+};
 
 const TAG: &str = "manager";
 
@@ -22,12 +23,36 @@ impl NetworkManager {
     pub async fn run(&mut self) -> anyhow::Result<(), NetworkError> {
         info!(target: TAG, "Running Network");
 
-        let _ = self.event_tx
+        self.event_tx
             .send(RuntimeEvent::FrameReceived {
                 peer: self.peer,
                 frame: vec![7],
             }).await
-            .map_err(NetworkError::NetworkChannelSendError);
+            .map_err(NetworkError::NetworkChannelSendError)?;
+
+        while let Some(command) = self.network_rx.next().await {
+            match command {
+                NetworkCommand::SendFrame { peer, .. } => {
+                    info!(target: TAG, "send frame to peer: {:?}", peer);
+                }
+                NetworkCommand::BroadcastFrame { .. } => {
+                    info!(target: TAG, "broadcast frame");
+                }
+                NetworkCommand::DisconnectPeer { peer } => {
+                    info!(target: TAG, "disconnect peer: {:?}", peer);
+                }
+                NetworkCommand::RequestBlocks { peer, from_height, to_height } => {
+                    info!(
+                        target: TAG,
+                        "request blocks from peer {:?}: {}..{}",
+                        peer,
+                        from_height,
+                        to_height
+                    );
+                }
+            }
+        }
+
         Ok(())
     }
 }
