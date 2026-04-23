@@ -13,10 +13,11 @@ use crate::runtime::node::{
     NodeRuntime,
     RuntimeEvent,
     StorageCommand,
-    StorageRx,
     WakeCommand,
     WakeRx,
 };
+use crate::storage::manager::StorageManager;
+use crate::storage::nvs_storage::{ NvsStorage };
 use rp_node::blockchain::Blockchain;
 use rp_node::node_engine::NodeEngine;
 
@@ -45,9 +46,11 @@ pub fn run() -> Result<(), RuntimeError> {
         wake_tx.clone()
     );
     let network_manager = NetworkManager::new(network_rx, event_tx.clone(), [0; 32]);
+    let nvs_storage = NvsStorage::new().unwrap();
+    let storage_manager = StorageManager::new(nvs_storage, event_tx.clone(), storage_rx);
 
     let runtime_handle = spawn_node_runtime(node_runtime);
-    let io_handle = spawn_io_runtime(event_tx.clone(), network_manager, storage_rx, wake_rx);
+    let io_handle = spawn_io_runtime(event_tx.clone(), network_manager, storage_manager, wake_rx);
 
     esp_block_on(async {
         wake_tx
@@ -80,28 +83,27 @@ fn spawn_node_runtime(node_runtime: NodeRuntime) -> thread::JoinHandle<Result<()
 fn spawn_io_runtime(
     event_tx: EventTx,
     network_manager: NetworkManager,
-    storage_rx: StorageRx,
+    storage_manager: StorageManager,
     wake_rx: WakeRx
 ) -> thread::JoinHandle<Result<(), RuntimeError>> {
     thread::Builder
         ::new()
         .name("io-runtime".into())
         .stack_size(IO_RUNTIME_STACK_SIZE)
-        .spawn(move || run_io_runtime(event_tx, network_manager, storage_rx, wake_rx))
+        .spawn(move || run_io_runtime(event_tx, network_manager, storage_manager, wake_rx))
         .expect("failed to spawn io-runtime thread")
 }
 
 fn run_io_runtime(
     event_tx: EventTx,
     network_manager: NetworkManager,
-    storage_rx: StorageRx,
+    storage_manager: StorageManager,
     wake_rx: WakeRx
 ) -> Result<(), RuntimeError> {
     let io_executor: LocalExecutor = Default::default();
 
     edge_block_on(
         io_executor.run(async {
-            let storage_event_tx = event_tx.clone();
             let wake_event_tx = event_tx.clone();
 
             let network_worker = io_executor.spawn(async move {
@@ -109,7 +111,8 @@ fn run_io_runtime(
                 network_manager.run().await.map_err(RuntimeError::NetworkError)
             });
             let storage_worker = io_executor.spawn(async move {
-                run_storage_task(storage_event_tx, storage_rx).await
+                let mut storage_manager = storage_manager;
+                storage_manager.run().await.map_err(RuntimeError::StorageError)
             });
             let wake_worker = io_executor.spawn(async move {
                 run_wake_task(wake_event_tx, wake_rx).await
@@ -132,28 +135,6 @@ fn run_io_runtime(
 
 fn now_ms() -> u64 {
     Instant::now().as_millis() as u64
-}
-
-async fn run_storage_task(
-    mut event_tx: EventTx,
-    mut storage_rx: StorageRx
-) -> Result<(), RuntimeError> {
-    while let Some(command) = storage_rx.next().await {
-        match command {
-            StorageCommand::LoadSnapshot { block_hash } => {
-                event_tx
-                    .send(RuntimeEvent::StorageLoaded {
-                        block_hash,
-                        state_bytes: None,
-                    }).await
-                    .map_err(RuntimeError::EventChannelSendError)?;
-            }
-            StorageCommand::PersistBlock { .. } => {}
-            StorageCommand::PersistSnapshot { .. } => {}
-        }
-    }
-
-    Ok(())
 }
 
 async fn run_wake_task(mut event_tx: EventTx, mut wake_rx: WakeRx) -> Result<(), RuntimeError> {

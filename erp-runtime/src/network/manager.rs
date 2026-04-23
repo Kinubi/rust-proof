@@ -1,11 +1,13 @@
 use ed25519_dalek::{ Signer, SigningKey };
 use futures::{ SinkExt, StreamExt };
 use log::info;
-use rp_core::{
-    models::block::Block,
-    traits::{ Hashable, ToBytes },
+use rp_core::{ models::block::Block, traits::{ Hashable, ToBytes } };
+use rp_node::{
+    blockchain::Blockchain,
+    contract::{ NodeInput, PeerId },
+    network::message::NetworkMessage,
+    node_engine::NodeEngine,
 };
-use rp_node::{ blockchain::Blockchain, contract::{ NodeInput, PeerId }, network::message::NetworkMessage, node_engine::NodeEngine };
 
 use crate::{
     network::errors::NetworkError,

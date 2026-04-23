@@ -2,7 +2,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use rp_core::models::block::Block;
-use rp_core::models::transaction::{ Transaction, TransactionData };
+use rp_core::models::transaction::{ Transaction };
 use rp_core::state::State;
 use rp_core::traits::{ FromBytes, Hashable, ToBytes };
 
@@ -311,7 +311,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
-    use rp_core::models::transaction::Transaction;
+    use rp_core::models::transaction::{ Transaction, TransactionData };
     use rp_core::traits::{ Hashable, ToBytes };
 
     use crate::contract::{ NodeAction, NodeInput };

@@ -23,6 +23,8 @@ anyhow = "1.0.102"
 fugit = "0.3.9"
 futures = "0.3.32"
 edge-executor = "0.4.1"
+embedded-svc = "0.29.0"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 rp-core = { path = "../rp-core" }
 rp-node = { path = "../rp-node" }
 ed25519-dalek = { version = "2.2.0", default-features=false, features = ["rand_core", "serde"] }
