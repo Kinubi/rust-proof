@@ -28,6 +28,7 @@ const WAKE_CHANNEL_CAPACITY: usize = 8;
 
 const NODE_RUNTIME_STACK_SIZE: usize = 64 * 1024;
 const IO_RUNTIME_STACK_SIZE: usize = 48 * 1024;
+const NETWORK_STARTUP_DELAY_MS: u64 = 500;
 
 pub fn run() -> Result<(), RuntimeError> {
     let blockchain = Blockchain::new().map_err(RuntimeError::NodeError)?;
@@ -107,6 +108,7 @@ fn run_io_runtime(
             let wake_event_tx = event_tx.clone();
 
             let network_worker = io_executor.spawn(async move {
+                Timer::after(Duration::from_millis(NETWORK_STARTUP_DELAY_MS)).await;
                 let mut network_manager = network_manager;
                 network_manager.run().await.map_err(RuntimeError::NetworkError)
             });
