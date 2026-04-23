@@ -2,12 +2,15 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use rp_core::models::block::Block;
+use rp_core::models::transaction::{ Transaction, TransactionData };
 use rp_core::state::State;
 use rp_core::traits::{ FromBytes, Hashable, ToBytes };
 
 use crate::contract::BlockHash;
 use crate::network::message::{ NetworkMessage, SyncResponse };
 use crate::{ blockchain::Blockchain, contract::{ NodeAction, NodeInput, PeerId } };
+
+const REQUEST_TIMEOUT_MS: u64 = 30_000;
 
 pub struct ParkedBlock {
     pub peer: PeerId,
@@ -18,7 +21,8 @@ pub struct NodeEngine {
     blockchain: Blockchain,
     pub peers: BTreeMap<PeerId, PeerState>,
     pub pending_requests: Vec<PendingRequest>,
-    pub pending_blocks: BTreeMap<BlockHash, ParkedBlock>,
+    pub pending_blocks: BTreeMap<BlockHash, Vec<ParkedBlock>>,
+    current_time_ms: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +36,7 @@ pub struct PendingRequest {
     pub peer: PeerId,
     pub from_height: u64,
     pub to_height: u64,
+    pub deadline_ms: u64,
 }
 
 impl NodeEngine {
@@ -41,10 +46,34 @@ impl NodeEngine {
             peers: BTreeMap::new(),
             pending_requests: Vec::new(),
             pending_blocks: BTreeMap::new(),
+            current_time_ms: 0,
         }
     }
 
-    fn request_parent_block(&self, parked_block: &ParkedBlock) -> Vec<NodeAction> {
+    fn prune_expired_requests(&mut self, now_ms: u64) {
+        self.pending_requests.retain(|request| request.deadline_ms > now_ms);
+    }
+
+    fn relay_transaction(&self, source_peer: PeerId, transaction: &Transaction) -> Vec<NodeAction> {
+        let frame = NetworkMessage::NewTransaction(transaction.clone()).to_bytes();
+
+        self.peers
+            .iter()
+            .filter(|(peer, state)| **peer != source_peer && state.connected)
+            .map(|(peer, _)| NodeAction::SendFrame {
+                peer: *peer,
+                frame: frame.clone(),
+            })
+            .collect()
+    }
+
+    fn request_parent_block(&self, parked_blocks: &[ParkedBlock]) -> Vec<NodeAction> {
+        let Some(parked_block) = parked_blocks.first() else {
+            return vec![NodeAction::ReportEvent {
+                message: "no parked blocks for missing parent",
+            }];
+        };
+
         let parent_height = parked_block.block.height.saturating_sub(1);
 
         vec![
@@ -59,31 +88,42 @@ impl NodeEngine {
         ]
     }
 
-    fn resume_parked_child(&mut self, parent_hash: BlockHash) -> Vec<NodeAction> {
-        let Some(parked_block) = self.pending_blocks.remove(&parent_hash) else {
+    fn import_parked_blocks(
+        &mut self,
+        parent_hash: BlockHash,
+        parent_state: &State
+    ) -> Vec<NodeAction> {
+        let Some(parked_blocks) = self.pending_blocks.remove(&parent_hash) else {
             return Vec::new();
         };
 
-        let parent_state = self.blockchain.state.clone();
-        if self.blockchain.add_block(parked_block.block.clone(), &parent_state).is_err() {
-            return vec![NodeAction::ReportEvent {
-                message: "failed importing parked block",
-            }];
-        }
+        let mut actions = Vec::new();
 
-        let block_hash = parked_block.block.hash();
-        let mut actions = vec![
-            NodeAction::PersistBlock {
+        for parked_block in parked_blocks {
+            let imported_block = match
+                self.blockchain.add_block(parked_block.block.clone(), parent_state)
+            {
+                Ok(imported_block) => imported_block,
+                Err(_) => {
+                    actions.push(NodeAction::ReportEvent {
+                        message: "failed importing parked block",
+                    });
+                    continue;
+                }
+            };
+
+            let block_hash = parked_block.block.hash();
+            actions.push(NodeAction::PersistBlock {
                 block: parked_block.block,
-            },
-            NodeAction::PersistSnapshot {
+            });
+            actions.push(NodeAction::PersistSnapshot {
                 block_hash,
-                state_bytes: self.blockchain.state.clone().to_bytes(),
-            }
-        ];
+                state_bytes: imported_block.next_state.to_bytes(),
+            });
 
-        if self.blockchain.head_hash == block_hash {
-            actions.extend(self.resume_parked_child(block_hash));
+            if imported_block.became_head {
+                actions.extend(self.import_parked_blocks(block_hash, &imported_block.next_state));
+            }
         }
 
         actions
@@ -92,11 +132,14 @@ impl NodeEngine {
     fn ingest_block(&mut self, peer: PeerId, block: Block) -> Vec<NodeAction> {
         if self.blockchain.head_hash == block.previous_hash {
             let parent_state = self.blockchain.state.clone();
-            if self.blockchain.add_block(block.clone(), &parent_state).is_err() {
-                return vec![NodeAction::ReportEvent {
-                    message: "failed importing block",
-                }];
-            }
+            let imported_block = match self.blockchain.add_block(block.clone(), &parent_state) {
+                Ok(imported_block) => imported_block,
+                Err(_) => {
+                    return vec![NodeAction::ReportEvent {
+                        message: "failed importing block",
+                    }];
+                }
+            };
 
             let block_hash = block.hash();
             let mut actions = vec![
@@ -105,17 +148,17 @@ impl NodeEngine {
                 },
                 NodeAction::PersistSnapshot {
                     block_hash,
-                    state_bytes: self.blockchain.state.clone().to_bytes(),
+                    state_bytes: imported_block.next_state.to_bytes(),
                 }
             ];
 
-            if self.blockchain.head_hash == block_hash {
-                actions.extend(self.resume_parked_child(block_hash));
+            if imported_block.became_head {
+                actions.extend(self.import_parked_blocks(block_hash, &imported_block.next_state));
             }
 
             actions
         } else {
-            self.pending_blocks.insert(block.previous_hash, ParkedBlock {
+            self.pending_blocks.entry(block.previous_hash).or_default().push(ParkedBlock {
                 peer,
                 block: block.clone(),
             });
@@ -128,6 +171,9 @@ impl NodeEngine {
     pub fn step(&mut self, input: NodeInput) -> Vec<NodeAction> {
         match input {
             NodeInput::Tick { now_ms } => {
+                self.current_time_ms = now_ms;
+                self.prune_expired_requests(now_ms);
+
                 let mut actions = Vec::new();
                 actions.push(NodeAction::ScheduleWake { at_ms: now_ms + 1_000 });
                 actions
@@ -145,6 +191,7 @@ impl NodeEngine {
 
             NodeInput::PeerDisconnected { peer } => {
                 self.peers.remove(&peer);
+                self.pending_requests.retain(|request| request.peer != peer);
                 vec![NodeAction::ReportEvent {
                     message: "peer disconnected",
                 }]
@@ -163,10 +210,11 @@ impl NodeEngine {
                 match message {
                     NetworkMessage::NewBlock(block) => self.ingest_block(peer, block),
                     NetworkMessage::NewTransaction(tx) => {
-                        if let Err(error) = self.blockchain.add_transaction(tx) {
-                            return vec![NodeAction::ReportEvent { message: error }];
+                        match self.blockchain.add_transaction(tx.clone()) {
+                            Ok(true) => self.relay_transaction(peer, &tx),
+                            Ok(false) => Vec::new(),
+                            Err(error) => vec![NodeAction::ReportEvent { message: error }],
                         }
-                        vec![NodeAction::FrameReceived { peer }]
                     }
                     NetworkMessage::SyncRequest(request) => {
                         let blocks = self.blockchain.get_blocks(
@@ -197,26 +245,28 @@ impl NodeEngine {
             }
 
             NodeInput::LocalTransactionSubmitted { transaction } => {
-                if self.blockchain.add_transaction(transaction.clone()).is_ok() {
-                    vec![NodeAction::BroadcastFrame {
-                        frame: NetworkMessage::NewTransaction(transaction).to_bytes(),
-                    }]
-                } else {
-                    vec![NodeAction::ReportEvent {
-                        message: "invalid transaction",
-                    }]
+                match self.blockchain.add_transaction(transaction.clone()) {
+                    Ok(true) =>
+                        vec![NodeAction::BroadcastFrame {
+                            frame: NetworkMessage::NewTransaction(transaction).to_bytes(),
+                        }],
+                    Ok(false) => Vec::new(),
+                    Err(_) =>
+                        vec![NodeAction::ReportEvent {
+                            message: "invalid transaction",
+                        }],
                 }
             }
 
             NodeInput::StorageLoaded { block_hash, state_bytes } => {
-                let Some(parked_block) = self.pending_blocks.get(&block_hash) else {
+                let Some(parked_blocks) = self.pending_blocks.get(&block_hash) else {
                     return vec![NodeAction::ReportEvent {
                         message: "unexpected snapshot result",
                     }];
                 };
 
                 let Some(state_bytes) = state_bytes else {
-                    return self.request_parent_block(parked_block);
+                    return self.request_parent_block(parked_blocks);
                 };
 
                 let loaded_state = match State::from_bytes(&state_bytes) {
@@ -228,34 +278,7 @@ impl NodeEngine {
                     }
                 };
 
-                let Some(parked_block) = self.pending_blocks.remove(&block_hash) else {
-                    return vec![NodeAction::ReportEvent {
-                        message: "parked block disappeared",
-                    }];
-                };
-
-                if self.blockchain.add_block(parked_block.block.clone(), &loaded_state).is_err() {
-                    return vec![NodeAction::ReportEvent {
-                        message: "failed importing parked block",
-                    }];
-                }
-
-                let block_hash = parked_block.block.hash();
-                let mut actions = vec![
-                    NodeAction::PersistBlock {
-                        block: parked_block.block,
-                    },
-                    NodeAction::PersistSnapshot {
-                        block_hash,
-                        state_bytes: self.blockchain.state.clone().to_bytes(),
-                    }
-                ];
-
-                if self.blockchain.head_hash == block_hash {
-                    actions.extend(self.resume_parked_child(block_hash));
-                }
-
-                actions
+                self.import_parked_blocks(block_hash, &loaded_state)
             }
 
             NodeInput::PersistCompleted { persist_type } => {
@@ -267,6 +290,7 @@ impl NodeEngine {
                     peer,
                     from_height,
                     to_height,
+                    deadline_ms: self.current_time_ms.saturating_add(REQUEST_TIMEOUT_MS),
                 });
                 vec![NodeAction::RequestBlocks {
                     peer,
@@ -283,10 +307,33 @@ mod tests {
     use super::*;
     use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
+    use rp_core::models::transaction::Transaction;
     use rp_core::traits::{ Hashable, ToBytes };
 
     use crate::contract::{ NodeAction, NodeInput };
     use crate::network::message::{ NetworkMessage, SyncResponse };
+
+    fn build_transfer_transaction(
+        sender: &SigningKey,
+        receiver: &SigningKey,
+        amount: u64,
+        fee: u64,
+        sequence: u64
+    ) -> Transaction {
+        let mut transaction = Transaction {
+            sender: sender.verifying_key(),
+            data: TransactionData::Transfer {
+                receiver: receiver.verifying_key(),
+                amount,
+            },
+            sequence,
+            fee,
+            signature: None,
+        };
+        let hash = transaction.hash();
+        transaction.signature = Some(sender.sign(&hash));
+        transaction
+    }
 
     fn build_empty_block(
         parent: &Block,
@@ -396,7 +443,7 @@ mod tests {
             &block_a,
             &State::from_bytes(&parent_state_bytes).unwrap(),
             &validator,
-            3,
+            3
         );
 
         let actions = engine.step(NodeInput::FrameReceived {
@@ -423,7 +470,7 @@ mod tests {
             &block_a,
             &State::from_bytes(&parent_state_bytes).unwrap(),
             &validator,
-            3,
+            3
         );
 
         let actions = engine.step(NodeInput::FrameReceived {
@@ -451,7 +498,7 @@ mod tests {
             &block_a,
             &State::from_bytes(&parent_state_bytes).unwrap(),
             &validator,
-            3,
+            3
         );
 
         let actions = engine.step(NodeInput::FrameReceived {
@@ -473,11 +520,7 @@ mod tests {
             _ => panic!("expected ReportEvent action"),
         }
         match &actions[1] {
-            NodeAction::RequestBlocks {
-                peer: action_peer,
-                from_height,
-                to_height,
-            } => {
+            NodeAction::RequestBlocks { peer: action_peer, from_height, to_height } => {
                 assert_eq!(*action_peer, peer);
                 assert_eq!(*from_height, 1);
                 assert_eq!(*to_height, 1);
@@ -514,5 +557,161 @@ mod tests {
         assert!(engine.pending_requests.is_empty());
         assert_eq!(engine.blockchain.head_hash, block.hash());
         assert_persist_actions(&actions, block.hash());
+    }
+
+    #[test]
+    fn test_peer_transaction_relays_to_other_connected_peers() {
+        let mut csprng = OsRng;
+        let sender = SigningKey::generate(&mut csprng);
+        let receiver = SigningKey::generate(&mut csprng);
+        let source_peer = [8u8; 32];
+        let peer_a = [9u8; 32];
+        let peer_b = [10u8; 32];
+
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        engine.blockchain.state.balances.insert(sender.verifying_key().to_bytes(), 100);
+        engine.step(NodeInput::PeerConnected { peer: source_peer });
+        engine.step(NodeInput::PeerConnected { peer: peer_a });
+        engine.step(NodeInput::PeerConnected { peer: peer_b });
+
+        let transaction = build_transfer_transaction(&sender, &receiver, 25, 1, 0);
+        let expected_frame = NetworkMessage::NewTransaction(transaction.clone()).to_bytes();
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer: source_peer,
+            frame: expected_frame.clone(),
+        });
+
+        assert_eq!(actions.len(), 2);
+        match &actions[0] {
+            NodeAction::SendFrame { peer, frame } => {
+                assert_eq!(*peer, peer_a);
+                assert_eq!(*frame, expected_frame);
+            }
+            _ => panic!("expected SendFrame action"),
+        }
+        match &actions[1] {
+            NodeAction::SendFrame { peer, frame } => {
+                assert_eq!(*peer, peer_b);
+                assert_eq!(*frame, expected_frame);
+            }
+            _ => panic!("expected SendFrame action"),
+        }
+    }
+
+    #[test]
+    fn test_duplicate_peer_transaction_is_not_relayed() {
+        let mut csprng = OsRng;
+        let sender = SigningKey::generate(&mut csprng);
+        let receiver = SigningKey::generate(&mut csprng);
+        let source_peer = [11u8; 32];
+        let other_peer = [12u8; 32];
+
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        engine.blockchain.state.balances.insert(sender.verifying_key().to_bytes(), 100);
+        engine.step(NodeInput::PeerConnected { peer: source_peer });
+        engine.step(NodeInput::PeerConnected { peer: other_peer });
+
+        let transaction = build_transfer_transaction(&sender, &receiver, 25, 1, 0);
+        let frame = NetworkMessage::NewTransaction(transaction).to_bytes();
+
+        let first_actions = engine.step(NodeInput::FrameReceived {
+            peer: source_peer,
+            frame: frame.clone(),
+        });
+        assert_eq!(first_actions.len(), 1);
+        assert!(matches!(first_actions[0], NodeAction::SendFrame { .. }));
+
+        let duplicate_actions = engine.step(NodeInput::FrameReceived {
+            peer: source_peer,
+            frame,
+        });
+        assert!(duplicate_actions.is_empty());
+    }
+
+    #[test]
+    fn test_peer_disconnected_clears_pending_requests_for_peer() {
+        let peer = [4u8; 32];
+        let other_peer = [5u8; 32];
+
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        engine.step(NodeInput::ImportRequested {
+            peer,
+            from_height: 1,
+            to_height: 2,
+        });
+        engine.step(NodeInput::ImportRequested {
+            peer: other_peer,
+            from_height: 3,
+            to_height: 4,
+        });
+
+        let actions = engine.step(NodeInput::PeerDisconnected { peer });
+
+        assert_eq!(actions.len(), 1);
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert_eq!(engine.pending_requests[0].peer, other_peer);
+    }
+
+    #[test]
+    fn test_tick_prunes_expired_pending_requests() {
+        let peer = [6u8; 32];
+
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        engine.step(NodeInput::Tick { now_ms: 1_000 });
+        engine.step(NodeInput::ImportRequested {
+            peer,
+            from_height: 1,
+            to_height: 1,
+        });
+
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert_eq!(engine.pending_requests[0].deadline_ms, 31_000);
+
+        let actions = engine.step(NodeInput::Tick { now_ms: 31_000 });
+
+        assert_eq!(actions.len(), 1);
+        assert!(engine.pending_requests.is_empty());
+    }
+
+    #[test]
+    fn test_storage_loaded_imports_multiple_parked_siblings() {
+        let mut csprng = OsRng;
+        let validator_a = SigningKey::generate(&mut csprng);
+        let validator_b = SigningKey::generate(&mut csprng);
+        let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
+
+        let child_a = build_empty_block(
+            &block_a,
+            &State::from_bytes(&parent_state_bytes).unwrap(),
+            &validator_a,
+            3
+        );
+        let child_b = build_empty_block(
+            &block_a,
+            &State::from_bytes(&parent_state_bytes).unwrap(),
+            &validator_b,
+            4
+        );
+
+        engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(child_a.clone()).to_bytes(),
+        });
+        engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(child_b.clone()).to_bytes(),
+        });
+
+        assert_eq!(engine.pending_blocks.get(&block_a.hash()).unwrap().len(), 2);
+
+        let actions = engine.step(NodeInput::StorageLoaded {
+            block_hash: block_a.hash(),
+            state_bytes: Some(parent_state_bytes),
+        });
+
+        assert_eq!(actions.len(), 4);
+        assert!(!engine.pending_blocks.contains_key(&block_a.hash()));
+        assert_eq!(engine.blockchain.head_hash, child_b.hash());
     }
 }

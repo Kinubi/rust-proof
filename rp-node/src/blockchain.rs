@@ -9,6 +9,11 @@ use alloc::vec::Vec;
 use alloc::vec;
 use alloc::collections::BTreeMap;
 
+pub struct ImportedBlock {
+    pub next_state: State,
+    pub became_head: bool,
+}
+
 /// The Blockchain represents the entire ledger, including the chain of blocks,
 /// the current state, and the mempool of pending transactions.
 #[derive(Debug)]
@@ -54,16 +59,19 @@ impl Blockchain {
             .expect("Blockchain should always have at least the genesis block").block
     }
 
-    pub fn add_transaction(&mut self, tx: Transaction) -> Result<(), &'static str> {
+    pub fn add_transaction(&mut self, tx: Transaction) -> Result<bool, &'static str> {
         if self.state.is_valid_tx(&tx) {
-            self.mempool.add_transaction(tx)?;
-            Ok(())
+            self.mempool.add_transaction(tx)
         } else {
             Err("Invalid transaction")
         }
     }
 
-    pub fn add_block(&mut self, block: Block, parent_state: &State) -> Result<(), NodeError> {
+    pub fn add_block(
+        &mut self,
+        block: Block,
+        parent_state: &State
+    ) -> Result<ImportedBlock, NodeError> {
         let parent_node = self.chain
             .get(&block.previous_hash)
             .ok_or(NodeError::ParentBlockNotFoundError)?;
@@ -93,13 +101,16 @@ impl Blockchain {
 
         if replace_head {
             self.head_hash = block_hash;
-            self.state = applied_block.next_state;
+            self.state = applied_block.next_state.clone();
 
             for tx in &block.transactions {
                 self.mempool.remove_transaction(&tx.hash());
             }
         }
-        Ok(())
+        Ok(ImportedBlock {
+            next_state: applied_block.next_state,
+            became_head: replace_head,
+        })
     }
 
     pub fn get_mempool(&self) -> Vec<Transaction> {

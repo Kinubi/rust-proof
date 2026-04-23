@@ -18,16 +18,20 @@ impl Mempool {
         }
     }
 
-    pub fn add_transaction(&mut self, tx: Transaction) -> Result<(), &'static str> {
+    pub fn add_transaction(&mut self, tx: Transaction) -> Result<bool, &'static str> {
+        if self.transactions.contains(&tx) {
+            return Ok(false);
+        }
+
         if self.transactions.len() < self.max_size {
             self.transactions.insert(tx);
-            return Ok(());
+            return Ok(true);
         } else {
             if let Some(lowest) = self.transactions.iter().last().cloned() {
                 if tx.fee > lowest.fee {
                     self.transactions.remove(&lowest);
                     self.transactions.insert(tx);
-                    return Ok(());
+                    return Ok(true);
                 } else {
                     return Err("Transaction fee too low to enter mempool");
                 }
@@ -135,5 +139,15 @@ mod tests {
 
         mempool.remove_transaction(&hash);
         assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_duplicate_transaction_returns_false() {
+        let mut mempool = Mempool::new(10);
+        let tx = create_tx_with_fee(10, 1);
+
+        assert_eq!(mempool.add_transaction(tx.clone()), Ok(true));
+        assert_eq!(mempool.add_transaction(tx), Ok(false));
+        assert_eq!(mempool.len(), 1);
     }
 }
