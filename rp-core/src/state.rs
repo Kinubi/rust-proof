@@ -1,4 +1,10 @@
-use ed25519_dalek::VerifyingKey;
+use crate::crypto::{
+    PublicKeyBytes,
+    PUBLIC_KEY_SIZE,
+    VerifyingKey,
+    verifying_key_from_bytes,
+    verifying_key_to_bytes,
+};
 use crate::models::slashing::SlashProof;
 use crate::models::transaction::{ Transaction, TransactionData, UnstakeRequest };
 use crate::traits::{ ToBytes, FromBytes, Hashable };
@@ -12,10 +18,10 @@ pub const UNSTAKE_LOCK_EPOCHS: u64 = 2; // Example: unstaked funds unlock after 
 /// The State represents the current balances and sequence numbers of all accounts.
 #[derive(Debug, Clone, Default)]
 pub struct State {
-    pub balances: BTreeMap<[u8; 32], u64>,
-    pub nonces: BTreeMap<[u8; 32], u64>,
-    pub stakes: BTreeMap<[u8; 32], u64>,
-    pub unstaking: BTreeMap<[u8; 32], Vec<UnstakeRequest>>,
+    pub balances: BTreeMap<PublicKeyBytes, u64>,
+    pub nonces: BTreeMap<PublicKeyBytes, u64>,
+    pub stakes: BTreeMap<PublicKeyBytes, u64>,
+    pub unstaking: BTreeMap<PublicKeyBytes, Vec<UnstakeRequest>>,
 }
 
 impl State {
@@ -30,17 +36,13 @@ impl State {
 
     /// Returns the balance of an account.
     pub fn get_balance(&self, account: &VerifyingKey) -> u64 {
-        let key_bytes = account.to_bytes();
-        let mut key_array = [0u8; 32];
-        key_array.copy_from_slice(&key_bytes);
+        let key_array = verifying_key_to_bytes(account);
         *self.balances.get(&key_array).unwrap_or(&0)
     }
 
     /// Returns the next expected sequence number for an account.
     pub fn get_nonce(&self, account: &VerifyingKey) -> u64 {
-        let key_bytes = account.to_bytes();
-        let mut key_array = [0u8; 32];
-        key_array.copy_from_slice(&key_bytes);
+        let key_array = verifying_key_to_bytes(account);
         *self.nonces.get(&key_array).unwrap_or(&0)
     }
 
@@ -61,9 +63,7 @@ impl State {
                 }
             }
             TransactionData::Unstake { amount } => {
-                let sender_key_bytes = tx.sender.to_bytes();
-                let mut sender_key_array = [0u8; 32];
-                sender_key_array.copy_from_slice(&sender_key_bytes);
+                let sender_key_array = verifying_key_to_bytes(&tx.sender);
                 let current_stake = *self.stakes.get(&sender_key_array).unwrap_or(&0);
                 if current_stake < *amount {
                     return false;
@@ -87,14 +87,10 @@ impl State {
     /// Applies a transaction to the state, updating balances and nonces.
     /// Assumes the transaction has already been validated.
     pub fn apply_tx(&mut self, tx: &Transaction, current_slot: u64) {
-        let sender_key_bytes = tx.sender.to_bytes();
-        let mut sender_key_array = [0u8; 32];
-        sender_key_array.copy_from_slice(&sender_key_bytes);
+        let sender_key_array = verifying_key_to_bytes(&tx.sender);
         match &tx.data {
             TransactionData::Transfer { receiver, amount } => {
-                let receiver_key_bytes = receiver.to_bytes();
-                let mut receiver_key_array = [0u8; 32];
-                receiver_key_array.copy_from_slice(&receiver_key_bytes);
+                let receiver_key_array = verifying_key_to_bytes(receiver);
                 *self.balances.entry(sender_key_array).or_insert(0) -= *amount;
                 *self.balances.entry(receiver_key_array).or_insert(0) += *amount;
                 *self.nonces.entry(sender_key_array).or_insert(0) += 1;
@@ -133,16 +129,17 @@ impl State {
         for (key_bytes, stake) in &self.stakes {
             cumulative_stake += *stake;
             if winning_ticket < cumulative_stake {
-                let mut key_array = [0u8; 32];
-                key_array.copy_from_slice(key_bytes);
-                return Some(VerifyingKey::from_bytes(&key_array).unwrap());
+                return Some(verifying_key_from_bytes(key_bytes).unwrap());
             }
         }
         None
     }
 
     pub fn compute_state_root(&self) -> [u8; 32] {
-        let mut balances_vec: Vec<([u8; 32], u64)> = self.balances.clone().into_iter().collect();
+        let mut balances_vec: Vec<(PublicKeyBytes, u64)> = self.balances
+            .clone()
+            .into_iter()
+            .collect();
         balances_vec.sort_by_key(|(k, _)| *k);
         let mut hashes = balances_vec
             .into_iter()
@@ -178,9 +175,7 @@ impl State {
     pub fn apply_slash(&mut self, proof: SlashProof) -> Result<(), SlashError> {
         let _ = proof.validate()?;
 
-        let validator_key_bytes = proof.validator.to_bytes();
-        let mut validator_key_array = [0u8; 32];
-        validator_key_array.copy_from_slice(&validator_key_bytes);
+        let validator_key_array = verifying_key_to_bytes(&proof.validator);
         self.stakes.remove(&validator_key_array);
         self.unstaking.remove(&validator_key_array);
         Ok(())
@@ -191,8 +186,8 @@ impl ToBytes for State {
     fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        // Helper to write a map of [u8; 32] -> u64
-        let write_u64_map = |map: &BTreeMap<[u8; 32], u64>, out: &mut Vec<u8>| {
+        // Helper to write a map of public key bytes -> u64
+        let write_u64_map = |map: &BTreeMap<PublicKeyBytes, u64>, out: &mut Vec<u8>| {
             out.extend_from_slice(&(map.len() as u64).to_be_bytes());
             for (k, v) in map {
                 out.extend_from_slice(k);
@@ -233,20 +228,20 @@ impl FromBytes for State {
             Ok(val)
         }
 
-        fn read_key(bytes: &[u8], i: &mut usize) -> Result<[u8; 32], &'static str> {
-            if *i + 32 > bytes.len() {
+        fn read_key(bytes: &[u8], i: &mut usize) -> Result<PublicKeyBytes, &'static str> {
+            if *i + PUBLIC_KEY_SIZE > bytes.len() {
                 return Err("Unexpected EOF reading key");
             }
-            let mut key = [0u8; 32];
-            key.copy_from_slice(&bytes[*i..*i + 32]);
-            *i += 32;
+            let mut key = [0u8; PUBLIC_KEY_SIZE];
+            key.copy_from_slice(&bytes[*i..*i + PUBLIC_KEY_SIZE]);
+            *i += PUBLIC_KEY_SIZE;
             Ok(key)
         }
 
         fn read_u64_map(
             bytes: &[u8],
             i: &mut usize,
-            map: &mut BTreeMap<[u8; 32], u64>
+            map: &mut BTreeMap<PublicKeyBytes, u64>
         ) -> Result<(), &'static str> {
             let len = read_u64(bytes, i)?;
             for _ in 0..len {
@@ -281,7 +276,7 @@ impl FromBytes for State {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ SigningKey, Signer };
+    use crate::crypto::{ Signer, SigningKey, verifying_key_to_bytes };
     use rand::rngs::OsRng;
     use crate::traits::Hashable;
 
@@ -293,9 +288,9 @@ mod tests {
         sequence: u64
     ) -> Transaction {
         let mut tx = Transaction {
-            sender: sender.verifying_key(),
+            sender: sender.verifying_key().clone(),
             data: TransactionData::Transfer {
-                receiver: *receiver,
+                receiver: receiver.clone(),
                 amount,
             },
             sequence,
@@ -311,46 +306,46 @@ mod tests {
     fn test_initial_state() {
         let state = State::new();
         let mut csprng = OsRng;
-        let keypair = SigningKey::generate(&mut csprng);
+        let keypair = SigningKey::random(&mut csprng);
 
-        assert_eq!(state.get_balance(&keypair.verifying_key()), 0);
-        assert_eq!(state.get_nonce(&keypair.verifying_key()), 0);
+        assert_eq!(state.get_balance(keypair.verifying_key()), 0);
+        assert_eq!(state.get_nonce(keypair.verifying_key()), 0);
     }
 
     #[test]
     fn test_apply_valid_transaction() {
         let mut csprng = OsRng;
-        let sender_keypair = SigningKey::generate(&mut csprng);
-        let receiver_keypair = SigningKey::generate(&mut csprng);
+        let sender_keypair = SigningKey::random(&mut csprng);
+        let receiver_keypair = SigningKey::random(&mut csprng);
 
         let mut state = State::new();
 
         // Give sender some initial balance (Uncomment after adding `balances` field)
-        state.balances.insert(sender_keypair.verifying_key().to_bytes(), 100);
+        state.balances.insert(verifying_key_to_bytes(sender_keypair.verifying_key()), 100);
 
-        let tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 0);
+        let tx = create_tx(&sender_keypair, receiver_keypair.verifying_key(), 50, 0);
 
         assert!(state.is_valid_tx(&tx));
         let current_slot = 1; // Example current slot
         state.apply_tx(&tx, current_slot);
-        assert_eq!(state.get_balance(&sender_keypair.verifying_key()), 50);
-        assert_eq!(state.get_balance(&receiver_keypair.verifying_key()), 50);
-        assert_eq!(state.get_nonce(&sender_keypair.verifying_key()), 1);
+        assert_eq!(state.get_balance(sender_keypair.verifying_key()), 50);
+        assert_eq!(state.get_balance(receiver_keypair.verifying_key()), 50);
+        assert_eq!(state.get_nonce(sender_keypair.verifying_key()), 1);
     }
 
     #[test]
     fn test_insufficient_funds() {
         let mut csprng = OsRng;
-        let sender_keypair = SigningKey::generate(&mut csprng);
-        let receiver_keypair = SigningKey::generate(&mut csprng);
+        let sender_keypair = SigningKey::random(&mut csprng);
+        let receiver_keypair = SigningKey::random(&mut csprng);
 
         let mut state = State::new();
 
         // Give sender ONLY 10 coins
-        state.balances.insert(sender_keypair.verifying_key().to_bytes(), 10);
+        state.balances.insert(verifying_key_to_bytes(sender_keypair.verifying_key()), 10);
 
         // Try to send 50
-        let tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 0);
+        let tx = create_tx(&sender_keypair, receiver_keypair.verifying_key(), 50, 0);
 
         // Uncomment after implementing is_valid_tx
         assert!(!state.is_valid_tx(&tx), "Transaction should be invalid due to insufficient funds");
@@ -359,14 +354,14 @@ mod tests {
     #[test]
     fn test_invalid_nonce() {
         let mut csprng = OsRng;
-        let sender_keypair = SigningKey::generate(&mut csprng);
-        let receiver_keypair = SigningKey::generate(&mut csprng);
+        let sender_keypair = SigningKey::random(&mut csprng);
+        let receiver_keypair = SigningKey::random(&mut csprng);
 
         let mut state = State::new();
-        state.balances.insert(sender_keypair.verifying_key().to_bytes(), 100);
+        state.balances.insert(verifying_key_to_bytes(sender_keypair.verifying_key()), 100);
 
         // Create tx with sequence 1, but expected nonce is 0
-        let tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 1);
+        let tx = create_tx(&sender_keypair, receiver_keypair.verifying_key(), 50, 1);
 
         // Uncomment after implementing is_valid_tx
         assert!(!state.is_valid_tx(&tx), "Transaction should be invalid due to wrong nonce");
@@ -375,13 +370,13 @@ mod tests {
     #[test]
     fn test_invalid_signature() {
         let mut csprng = OsRng;
-        let sender_keypair = SigningKey::generate(&mut csprng);
-        let receiver_keypair = SigningKey::generate(&mut csprng);
+        let sender_keypair = SigningKey::random(&mut csprng);
+        let receiver_keypair = SigningKey::random(&mut csprng);
 
         let mut state = State::new();
-        state.balances.insert(sender_keypair.verifying_key().to_bytes(), 100);
+        state.balances.insert(verifying_key_to_bytes(sender_keypair.verifying_key()), 100);
 
-        let mut tx = create_tx(&sender_keypair, &receiver_keypair.verifying_key(), 50, 0);
+        let mut tx = create_tx(&sender_keypair, receiver_keypair.verifying_key(), 50, 0);
 
         // Tamper with the transaction amount AFTER it was signed
         if let TransactionData::Transfer { amount, .. } = &mut tx.data {
@@ -398,9 +393,9 @@ mod tests {
     #[test]
     fn test_validator_selection() {
         let mut csprng = OsRng;
-        let val1 = SigningKey::generate(&mut csprng);
-        let val2 = SigningKey::generate(&mut csprng);
-        let val3 = SigningKey::generate(&mut csprng);
+        let val1 = SigningKey::random(&mut csprng);
+        let val2 = SigningKey::random(&mut csprng);
+        let val3 = SigningKey::random(&mut csprng);
 
         let mut state = State::new();
 
@@ -408,9 +403,9 @@ mod tests {
         assert!(state.get_expected_validator(1).is_none());
 
         // Add stakes
-        state.stakes.insert(val1.verifying_key().to_bytes(), 100);
-        state.stakes.insert(val2.verifying_key().to_bytes(), 200);
-        state.stakes.insert(val3.verifying_key().to_bytes(), 300);
+        state.stakes.insert(verifying_key_to_bytes(val1.verifying_key()), 100);
+        state.stakes.insert(verifying_key_to_bytes(val2.verifying_key()), 200);
+        state.stakes.insert(verifying_key_to_bytes(val3.verifying_key()), 300);
 
         // Total stake is 600.
         // Because HashMap iteration order is random, we can't easily assert *which* specific
@@ -419,9 +414,9 @@ mod tests {
 
         let winner_block_1 = state.get_expected_validator(1).unwrap();
         assert!(
-            winner_block_1 == val1.verifying_key() ||
-                winner_block_1 == val2.verifying_key() ||
-                winner_block_1 == val3.verifying_key()
+            winner_block_1 == val1.verifying_key().clone() ||
+                winner_block_1 == val2.verifying_key().clone() ||
+                winner_block_1 == val3.verifying_key().clone()
         );
 
         // If you implemented the sorting logic in `get_expected_validator` (as hinted in Chapter 4),
@@ -437,8 +432,8 @@ mod tests {
         let root1 = state.compute_state_root();
 
         let mut csprng = OsRng;
-        let key1 = SigningKey::generate(&mut csprng).verifying_key().to_bytes();
-        let key2 = SigningKey::generate(&mut csprng).verifying_key().to_bytes();
+        let key1 = verifying_key_to_bytes(SigningKey::random(&mut csprng).verifying_key());
+        let key2 = verifying_key_to_bytes(SigningKey::random(&mut csprng).verifying_key());
 
         state.balances.insert(key1, 100);
         let root2 = state.compute_state_root();

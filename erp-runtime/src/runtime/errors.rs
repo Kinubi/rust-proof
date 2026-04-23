@@ -14,6 +14,7 @@ pub enum ChannelKind {
 pub enum RuntimeError {
     Node(NodeError),
     Contract(ContractError),
+    Crypto(&'static str),
     StorageInit(EspError),
     ChannelSend {
         channel: ChannelKind,
@@ -22,6 +23,10 @@ pub enum RuntimeError {
 }
 
 impl RuntimeError {
+    pub fn crypto(message: &'static str) -> Self {
+        Self::Crypto(message)
+    }
+
     pub fn event_send(source: SendError) -> Self {
         Self::ChannelSend {
             channel: ChannelKind::Event,

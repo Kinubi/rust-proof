@@ -1,7 +1,7 @@
 use crate::models::slashing::SlashProof;
 use crate::traits::{ Hashable, ToBytes };
 use crate::models::transaction::Transaction;
-use ed25519_dalek::{ Signature, VerifyingKey };
+use crate::crypto::{ Signature, Verifier, VerifyingKey };
 use alloc::vec::Vec;
 
 use serde_derive::{ Serialize, Deserialize };
@@ -16,6 +16,7 @@ pub struct Block {
     /// The hash of the previous block.
     pub previous_hash: [u8; 32],
     /// The public key of the validator who forged this block.
+    #[serde(with = "crate::crypto::serde_verifying_key")]
     pub validator: VerifyingKey,
     /// The transactions included in this block.
     pub transactions: Vec<Transaction>,
@@ -46,7 +47,7 @@ impl Block {
     pub fn is_valid(&self) -> bool {
         if let Some(signature) = &self.signature {
             let hash = self.hash();
-            self.validator.verify_strict(&hash[..], signature).is_ok()
+            self.validator.verify(&hash[..], signature).is_ok()
         } else {
             return false;
         }
@@ -72,20 +73,20 @@ impl ToBytes for BlockNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ SigningKey, Signer };
+    use crate::crypto::{ Signer, SigningKey };
     use rand::rngs::OsRng;
     use alloc::vec;
 
     #[test]
     fn test_block_signing_and_verification() {
         let mut csprng = OsRng;
-        let validator_keypair = SigningKey::generate(&mut csprng);
+        let validator_keypair = SigningKey::random(&mut csprng);
 
         let mut block = Block {
             height: 1,
             slot: 1,
             previous_hash: [0; 32],
-            validator: validator_keypair.verifying_key(),
+            validator: validator_keypair.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],

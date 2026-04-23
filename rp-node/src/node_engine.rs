@@ -342,8 +342,8 @@ impl NodeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
+    use rp_core::crypto::{ Signer, SigningKey, verifying_key_to_bytes };
     use rp_core::models::transaction::{ Transaction, TransactionData };
     use rp_core::traits::{ Hashable, ToBytes };
 
@@ -358,9 +358,9 @@ mod tests {
         sequence: u64
     ) -> Transaction {
         let mut transaction = Transaction {
-            sender: sender.verifying_key(),
+            sender: sender.verifying_key().clone(),
             data: TransactionData::Transfer {
-                receiver: receiver.verifying_key(),
+                receiver: receiver.verifying_key().clone(),
                 amount,
             },
             sequence,
@@ -382,7 +382,7 @@ mod tests {
             height: parent.height + 1,
             slot,
             previous_hash: parent.hash(),
-            validator: validator.verifying_key(),
+            validator: validator.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -413,8 +413,8 @@ mod tests {
 
     fn setup_forked_engine() -> (NodeEngine, PeerId, Block, Vec<u8>) {
         let mut csprng = OsRng;
-        let validator_a = SigningKey::generate(&mut csprng);
-        let validator_b = SigningKey::generate(&mut csprng);
+        let validator_a = SigningKey::random(&mut csprng);
+        let validator_b = SigningKey::random(&mut csprng);
         let peer = [7u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn test_frame_received_direct_child_persists_block_and_snapshot() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let peer = [1u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn test_frame_received_non_head_child_emits_load_snapshot() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
         let child_of_a = build_empty_block(
             &block_a,
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn test_storage_loaded_imports_parked_block_and_persists_it() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
         let child_of_a = build_empty_block(
             &block_a,
@@ -529,7 +529,7 @@ mod tests {
     #[test]
     fn test_storage_loaded_none_requests_parent_block() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
         let child_of_a = build_empty_block(
             &block_a,
@@ -569,7 +569,7 @@ mod tests {
     #[test]
     fn test_sync_response_uses_ingest_path_and_clears_pending_request() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let peer = [3u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
@@ -599,14 +599,17 @@ mod tests {
     #[test]
     fn test_peer_transaction_relays_to_other_connected_peers() {
         let mut csprng = OsRng;
-        let sender = SigningKey::generate(&mut csprng);
-        let receiver = SigningKey::generate(&mut csprng);
+        let sender = SigningKey::random(&mut csprng);
+        let receiver = SigningKey::random(&mut csprng);
         let source_peer = [8u8; 32];
         let peer_a = [9u8; 32];
         let peer_b = [10u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
-        engine.blockchain.state.balances.insert(sender.verifying_key().to_bytes(), 100);
+        engine.blockchain.state.balances.insert(
+            verifying_key_to_bytes(sender.verifying_key()),
+            100
+        );
         engine.step(NodeInput::PeerConnected { peer: source_peer });
         engine.step(NodeInput::PeerConnected { peer: peer_a });
         engine.step(NodeInput::PeerConnected { peer: peer_b });
@@ -639,13 +642,16 @@ mod tests {
     #[test]
     fn test_duplicate_peer_transaction_is_not_relayed() {
         let mut csprng = OsRng;
-        let sender = SigningKey::generate(&mut csprng);
-        let receiver = SigningKey::generate(&mut csprng);
+        let sender = SigningKey::random(&mut csprng);
+        let receiver = SigningKey::random(&mut csprng);
         let source_peer = [11u8; 32];
         let other_peer = [12u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
-        engine.blockchain.state.balances.insert(sender.verifying_key().to_bytes(), 100);
+        engine.blockchain.state.balances.insert(
+            verifying_key_to_bytes(sender.verifying_key()),
+            100
+        );
         engine.step(NodeInput::PeerConnected { peer: source_peer });
         engine.step(NodeInput::PeerConnected { peer: other_peer });
 
@@ -714,8 +720,8 @@ mod tests {
     #[test]
     fn test_storage_loaded_imports_multiple_parked_siblings() {
         let mut csprng = OsRng;
-        let validator_a = SigningKey::generate(&mut csprng);
-        let validator_b = SigningKey::generate(&mut csprng);
+        let validator_a = SigningKey::random(&mut csprng);
+        let validator_b = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
 
         let child_a = build_empty_block(

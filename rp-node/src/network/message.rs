@@ -61,8 +61,8 @@ impl FromBytes for SyncResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
+    use rp_core::crypto::{ Signer, SigningKey };
     use rp_core::models::transaction::TransactionData;
     use rp_core::traits::Hashable;
 
@@ -83,13 +83,13 @@ mod tests {
     #[test]
     fn test_network_message_transaction_round_trip() {
         let mut csprng = OsRng;
-        let sender = SigningKey::generate(&mut csprng);
-        let receiver = SigningKey::generate(&mut csprng);
+        let sender = SigningKey::random(&mut csprng);
+        let receiver = SigningKey::random(&mut csprng);
 
         let mut transaction = Transaction {
-            sender: sender.verifying_key(),
+            sender: sender.verifying_key().clone(),
             data: TransactionData::Transfer {
-                receiver: receiver.verifying_key(),
+                receiver: receiver.verifying_key().clone(),
                 amount: 25,
             },
             sequence: 1,

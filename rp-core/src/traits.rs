@@ -1,6 +1,7 @@
 use sha2::{ Digest, Sha256 };
-use ed25519_dalek::VerifyingKey;
 use alloc::vec::Vec;
+
+use crate::crypto::{ VerifyingKey, verifying_key_bytes };
 
 /// A trait for converting a type into a flat array of bytes.
 /// This is essential for hashing and network transmission.
@@ -64,9 +65,7 @@ impl ToBytes for Vec<u8> {
 
 impl ToBytes for VerifyingKey {
     fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&self.to_bytes());
-        bytes
+        verifying_key_bytes(self)
     }
 }
 

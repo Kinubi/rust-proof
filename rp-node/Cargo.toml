@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 rp-core = { path = "../rp-core" }
 serde = { version = "1.0.228", features = ["derive"] }
-ed25519-dalek = { version = "2.2.0", default-features=false, features = ["rand_core", "serde"] }
 spin = "0.10.0"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 

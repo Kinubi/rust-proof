@@ -1,5 +1,5 @@
 use crate::{ models::block::Block, traits::ToBytes };
-use ed25519_dalek::VerifyingKey;
+use crate::crypto::VerifyingKey;
 use serde::{ Deserialize, Serialize };
 use crate::traits::Hashable;
 use alloc::vec::Vec;
@@ -9,6 +9,7 @@ use crate::errors::SlashError;
 /// This is a slashable offense (equivocation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlashProof {
+    #[serde(with = "crate::crypto::serde_verifying_key")]
     pub validator: VerifyingKey,
     pub block_a: Block,
     pub block_b: Block,
@@ -50,19 +51,19 @@ impl ToBytes for SlashProof {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ SigningKey, Signer };
+    use crate::crypto::{ Signer, SigningKey };
     use rand::rngs::OsRng;
     use alloc::vec;
     // Add tests here to verify that valid slash proofs pass and invalid ones fail!
     #[test]
     fn test_valid_slash_proof() {
         let mut csprng = OsRng;
-        let validator_keypair = SigningKey::generate(&mut csprng);
+        let validator_keypair = SigningKey::random(&mut csprng);
         let mut block_a = Block {
             height: 2,
             slot: 1,
             previous_hash: [0; 32],
-            validator: validator_keypair.verifying_key(),
+            validator: validator_keypair.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -72,7 +73,7 @@ mod tests {
             height: 1,
             slot: 1,
             previous_hash: [0; 32],
-            validator: validator_keypair.verifying_key(),
+            validator: validator_keypair.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -93,7 +94,7 @@ mod tests {
         block_b.signature = Some(signature_b);
 
         let proof = SlashProof {
-            validator: validator_keypair.verifying_key(),
+            validator: validator_keypair.verifying_key().clone(),
             block_a,
             block_b,
         };

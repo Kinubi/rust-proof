@@ -3,6 +3,7 @@ use edge_executor::{ block_on as edge_block_on, LocalExecutor };
 use esp_idf_hal::task::block_on as esp_block_on;
 use futures::channel::mpsc;
 use futures::{ SinkExt, StreamExt };
+use log::error;
 use std::thread;
 
 use crate::network::manager::NetworkManager;
@@ -108,14 +109,26 @@ fn run_io_runtime(
             let network_worker = io_executor.spawn(async move {
                 Timer::after(Duration::from_millis(NETWORK_STARTUP_DELAY_MS)).await;
                 let mut network_manager = network_manager;
-                network_manager.run().await
+                let result = network_manager.run().await;
+                if let Err(error) = &result {
+                    error!(target: "host", "network worker failed: {:?}", error);
+                }
+                result
             });
             let storage_worker = io_executor.spawn(async move {
                 let mut storage_manager = storage_manager;
-                storage_manager.run().await
+                let result = storage_manager.run().await;
+                if let Err(error) = &result {
+                    error!(target: "host", "storage worker failed: {:?}", error);
+                }
+                result
             });
             let wake_worker = io_executor.spawn(async move {
-                run_wake_task(wake_event_tx, wake_rx).await
+                let result = run_wake_task(wake_event_tx, wake_rx).await;
+                if let Err(error) = &result {
+                    error!(target: "host", "wake worker failed: {:?}", error);
+                }
+                result
             });
 
             let (network_res, storage_res, wake_res) = futures::join!(
