@@ -176,6 +176,7 @@ impl NodeEngine {
 
                 let mut actions = Vec::new();
                 actions.push(NodeAction::ScheduleWake { at_ms: now_ms + 1_000 });
+                actions.push(NodeAction::ReportEvent { message: "We have a tick" });
                 actions
             }
 

@@ -10,7 +10,7 @@
 use esp_idf_hal::peripherals::Peripherals;
 
 use anyhow::Context;
-use embassy_time::{ Duration, Timer }; // Using Embassy for timing
+use embassy_time::{ Duration, Timer, Instant }; // Using Embassy for timing
 use esp_idf_hal::task::block_on;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::log::EspLogger;
@@ -18,9 +18,10 @@ use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{ AsyncWifi, ClientConfiguration, Configuration, EspWifi };
 use futures::future::join;
 use futures::channel::mpsc;
+use futures::SinkExt;
 use erp_runtime::runtime;
 use log::{ info, warn };
-use erp_runtime::runtime::node::{ NetworkCommand, NodeRuntime, RuntimeEvent };
+use erp_runtime::runtime::node::{ EventTx, NetworkCommand, NodeRuntime, RuntimeEvent };
 use rp_node::blockchain::{ Blockchain };
 use rp_node::errors::NodeError;
 use rp_node::node_engine::NodeEngine;
@@ -91,7 +92,7 @@ fn main() -> anyhow::Result<(), NodeError> {
 
     block_on(async {
         // Run both Wifi and Main loop concurrently
-        let _node_result = node_runtime.run().await?;
+        let _node_result = join(node_runtime.run(), tick_task(event_tx)).await;
         Ok(())
     })
 }
@@ -102,3 +103,17 @@ fn main() -> anyhow::Result<(), NodeError> {
 //         Timer::after(Duration::from_millis(1000)).await;
 //     }
 // }
+
+fn now_ms() -> u64 {
+    Instant::now().as_millis() as u64
+}
+
+async fn tick_task(mut event_tx: EventTx) {
+    loop {
+        Timer::after(Duration::from_millis(1000)).await;
+
+        if event_tx.send(RuntimeEvent::Tick { now_ms: now_ms() }).await.is_err() {
+            break;
+        }
+    }
+}
