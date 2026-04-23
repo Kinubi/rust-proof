@@ -132,7 +132,6 @@ impl Storage for NvsStorage {
         let block_hash = block.hash();
         let block_bytes = postcard::to_allocvec(block).map_err(|_| ContractError::Storage)?;
 
-        info!(target: TAG, "Block: {:?} saved", block.hash());
         self.save_hashed_blob(BLOCK_KEY_PREFIX, &block_hash, &block_bytes)
     }
     fn load_block(&mut self, hash: &BlockHash) -> Result<Option<Block>, ContractError> {
