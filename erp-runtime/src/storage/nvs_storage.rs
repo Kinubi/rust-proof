@@ -6,10 +6,6 @@ use esp_idf_svc::nvs::{ EspKeyValueStorage, EspNvs, EspNvsPartition, NvsDefault 
 use rp_core::{ models::block::Block, traits::Hashable };
 use rp_node::{ contract::{ BlockHash, Storage }, errors::ContractError };
 use std::string::String;
-use log::info;
-
-const TAG: &str = "nvs_storage";
-
 pub struct NvsStorage {
     nvs_kv_storage: EspKeyValueStorage<NvsDefault>,
 }
@@ -18,6 +14,7 @@ const NVS_NAMESPACE: &str = "rp";
 const BLOCK_KEY_PREFIX: char = 'b';
 const SNAPSHOT_KEY_PREFIX: char = 's';
 const HASH_BUCKET_BYTES: usize = 6;
+const LATEST_SNAPSHOT_KEY: &str = "latest_snap";
 
 impl NvsStorage {
     pub fn new() -> Result<Self, EspError> {
@@ -125,6 +122,41 @@ impl NvsStorage {
 
         Err(ContractError::Storage)
     }
+
+    fn read_hash_key(&self, key: &str) -> Result<Option<BlockHash>, ContractError> {
+        let Some(bytes) = self.read_blob(key)? else {
+            return Ok(None);
+        };
+
+        if bytes.len() != BlockHash::default().len() {
+            return Err(ContractError::Storage);
+        }
+
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&bytes);
+        Ok(Some(hash))
+    }
+
+    fn write_hash_key(&mut self, key: &str, hash: &BlockHash) -> Result<(), ContractError> {
+        self.write_blob(key, hash)
+    }
+
+    pub fn load_latest_snapshot_bundle(
+        &mut self
+    ) -> Result<Option<(Block, Vec<u8>)>, ContractError> {
+        let Some(block_hash) = self.read_hash_key(LATEST_SNAPSHOT_KEY)? else {
+            return Ok(None);
+        };
+
+        let Some(block) = self.load_block(&block_hash)? else {
+            return Err(ContractError::Storage);
+        };
+        let Some(state_bytes) = self.load_snapshot(&block_hash)? else {
+            return Err(ContractError::Storage);
+        };
+
+        Ok(Some((block, state_bytes)))
+    }
 }
 
 impl Storage for NvsStorage {
@@ -152,7 +184,8 @@ impl Storage for NvsStorage {
         block_hash: &BlockHash,
         state_bytes: &[u8]
     ) -> Result<(), ContractError> {
-        self.save_hashed_blob(SNAPSHOT_KEY_PREFIX, block_hash, state_bytes)
+        self.save_hashed_blob(SNAPSHOT_KEY_PREFIX, block_hash, state_bytes)?;
+        self.write_hash_key(LATEST_SNAPSHOT_KEY, block_hash)
     }
     fn load_snapshot(&mut self, block_hash: &BlockHash) -> Result<Option<Vec<u8>>, ContractError> {
         self.load_hashed_blob(SNAPSHOT_KEY_PREFIX, block_hash)

@@ -27,6 +27,10 @@ pub enum RuntimeEvent {
         block_hash: [u8; 32],
         state_bytes: Option<Vec<u8>>,
     },
+    LatestSnapshotLoaded {
+        block: Option<Block>,
+        state_bytes: Option<Vec<u8>>,
+    },
 }
 
 pub enum NetworkCommand {
@@ -48,6 +52,7 @@ pub enum NetworkCommand {
 }
 
 pub enum StorageCommand {
+    LoadLatestSnapshot,
     PersistBlock {
         block: Block,
     },
@@ -95,29 +100,37 @@ impl NodeRuntime {
 
     pub async fn run(&mut self) -> anyhow::Result<(), RuntimeError> {
         info!(target: TAG, "Running Runtime");
+        info!(target: TAG, "Loading latest snapshot");
+        self.storage_tx
+            .send(StorageCommand::LoadLatestSnapshot).await
+            .map_err(RuntimeError::StorageChannelSendError)?;
+
         loop {
-            let actions: Vec<NodeAction>;
-            match self.event_rx.next().await.unwrap() {
+            let actions = match self.event_rx.next().await.unwrap() {
+                RuntimeEvent::LatestSnapshotLoaded { block, state_bytes } => {
+                    self.node_engine.restore_latest_snapshot(block, state_bytes)
+                }
                 RuntimeEvent::Tick { now_ms } => {
-                    actions = self.node_engine.step(NodeInput::Tick { now_ms });
+                    self.node_engine.step(NodeInput::Tick { now_ms })
                 }
                 RuntimeEvent::PeerConnected { peer } => {
-                    actions = self.node_engine.step(NodeInput::PeerConnected { peer });
+                    self.node_engine.step(NodeInput::PeerConnected { peer })
                 }
                 RuntimeEvent::PeerDisconnected { peer } => {
-                    actions = self.node_engine.step(NodeInput::PeerDisconnected { peer });
+                    self.node_engine.step(NodeInput::PeerDisconnected { peer })
                 }
                 RuntimeEvent::FrameReceived { peer, frame } => {
                     info!(target: TAG, "Frame: {:?} received", frame);
-                    actions = self.node_engine.step(NodeInput::FrameReceived { peer, frame });
+                    self.node_engine.step(NodeInput::FrameReceived { peer, frame })
                 }
                 RuntimeEvent::StorageLoaded { block_hash, state_bytes } => {
-                    actions = self.node_engine.step(NodeInput::StorageLoaded {
+                    self.node_engine.step(NodeInput::StorageLoaded {
                         block_hash,
                         state_bytes,
-                    });
+                    })
                 }
-            }
+            };
+
             for action in actions {
                 let _ = self.handle_action(action).await;
             }

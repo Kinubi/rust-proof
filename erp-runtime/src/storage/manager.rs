@@ -1,5 +1,5 @@
 use anyhow::Result;
-use futures::{ SinkExt, StreamExt, TryFutureExt };
+use futures::{ SinkExt, StreamExt };
 use rp_node::contract::Storage;
 
 use crate::{ storage::nvs_storage::NvsStorage };
@@ -19,27 +19,42 @@ impl StorageManager {
     pub async fn run(&mut self) -> Result<(), StorageError> {
         loop {
             match self.storage_rx.next().await.unwrap() {
+                StorageCommand::LoadLatestSnapshot => {
+                    let latest_snapshot = self.storage
+                        .load_latest_snapshot_bundle()
+                        .map_err(StorageError::ContractError)?;
+
+                    let (block, state_bytes) = match latest_snapshot {
+                        Some((block, state_bytes)) => (Some(block), Some(state_bytes)),
+                        None => (None, None),
+                    };
+
+                    self.event_tx
+                        .send(crate::runtime::node::RuntimeEvent::LatestSnapshotLoaded {
+                            block,
+                            state_bytes,
+                        }).await
+                        .map_err(StorageError::StorageChannelSendError)?;
+                }
                 StorageCommand::LoadSnapshot { block_hash } => {
-                    if
-                        let Ok(state_bytes) = self.storage
-                            .load_snapshot(&block_hash)
-                            .map_err(StorageError::ContractError)
-                    {
-                        let _ = self.event_tx
-                            .send(crate::runtime::node::RuntimeEvent::StorageLoaded {
-                                block_hash,
-                                state_bytes,
-                            })
-                            .map_err(StorageError::StorageChannelSendError);
-                    }
+                    let state_bytes = self.storage
+                        .load_snapshot(&block_hash)
+                        .map_err(StorageError::ContractError)?;
+
+                    self.event_tx
+                        .send(crate::runtime::node::RuntimeEvent::StorageLoaded {
+                            block_hash,
+                            state_bytes,
+                        }).await
+                        .map_err(StorageError::StorageChannelSendError)?;
                 }
                 StorageCommand::PersistBlock { block } => {
-                    let _ = self.storage.save_block(&block).map_err(StorageError::ContractError);
+                    self.storage.save_block(&block).map_err(StorageError::ContractError)?;
                 }
                 StorageCommand::PersistSnapshot { block_hash, state_bytes } => {
-                    let _ = self.storage
+                    self.storage
                         .save_snapshot(&block_hash, &state_bytes)
-                        .map_err(StorageError::ContractError);
+                        .map_err(StorageError::ContractError)?;
                 }
             }
         }

@@ -59,6 +59,14 @@ impl Blockchain {
             .expect("Blockchain should always have at least the genesis block").block
     }
 
+    pub fn restore_head(&mut self, block: Block, state: State) {
+        let block_hash = block.hash();
+        self.chain.insert(block_hash, BlockNode { block, children: vec![] });
+        self.head_hash = block_hash;
+        self.state = state;
+        self.mempool = Mempool::new(10000);
+    }
+
     pub fn add_transaction(&mut self, tx: Transaction) -> Result<bool, &'static str> {
         if self.state.is_valid_tx(&tx) {
             self.mempool.add_transaction(tx)

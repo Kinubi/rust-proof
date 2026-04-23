@@ -50,6 +50,39 @@ impl NodeEngine {
         }
     }
 
+    pub fn restore_latest_snapshot(
+        &mut self,
+        block: Option<Block>,
+        state_bytes: Option<Vec<u8>>
+    ) -> Vec<NodeAction> {
+        let (Some(block), Some(state_bytes)) = (block, state_bytes) else {
+            return vec![NodeAction::ReportEvent {
+                message: "no snapshot restored",
+            }];
+        };
+
+        let restored_state = match State::from_bytes(&state_bytes) {
+            Ok(state) => state,
+            Err(_) => {
+                return vec![NodeAction::ReportEvent {
+                    message: "invalid startup snapshot bytes",
+                }];
+            }
+        };
+
+        if block.state_root != restored_state.compute_state_root() {
+            return vec![NodeAction::ReportEvent {
+                message: "startup snapshot state root mismatch",
+            }];
+        }
+
+        self.blockchain.restore_head(block, restored_state);
+
+        vec![NodeAction::ReportEvent {
+            message: "startup snapshot restored",
+        }]
+    }
+
     fn prune_expired_requests(&mut self, now_ms: u64) {
         self.pending_requests.retain(|request| request.deadline_ms > now_ms);
     }
