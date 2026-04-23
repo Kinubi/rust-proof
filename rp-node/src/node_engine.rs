@@ -149,6 +149,9 @@ impl NodeEngine {
                 NodeAction::PersistSnapshot {
                     block_hash,
                     state_bytes: imported_block.next_state.to_bytes(),
+                },
+                NodeAction::ReportEvent {
+                    message: "Block added",
                 }
             ];
 
