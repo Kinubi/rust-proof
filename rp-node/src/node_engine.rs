@@ -1,15 +1,24 @@
 use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
-use rp_core::traits::{ FromBytes, ToBytes };
+use rp_core::models::block::Block;
+use rp_core::state::State;
+use rp_core::traits::{ FromBytes, Hashable, ToBytes };
 
+use crate::contract::BlockHash;
 use crate::network::message::{ NetworkMessage, SyncResponse };
 use crate::{ blockchain::Blockchain, contract::{ NodeAction, NodeInput, PeerId } };
+
+pub struct ParkedBlock {
+    pub peer: PeerId,
+    pub block: Block,
+}
 
 pub struct NodeEngine {
     blockchain: Blockchain,
     pub peers: BTreeMap<PeerId, PeerState>,
     pub pending_requests: Vec<PendingRequest>,
+    pub pending_blocks: BTreeMap<BlockHash, ParkedBlock>,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +40,88 @@ impl NodeEngine {
             blockchain,
             peers: BTreeMap::new(),
             pending_requests: Vec::new(),
+            pending_blocks: BTreeMap::new(),
+        }
+    }
+
+    fn request_parent_block(&self, parked_block: &ParkedBlock) -> Vec<NodeAction> {
+        let parent_height = parked_block.block.height.saturating_sub(1);
+
+        vec![
+            NodeAction::ReportEvent {
+                message: "parent snapshot missing",
+            },
+            NodeAction::RequestBlocks {
+                peer: parked_block.peer,
+                from_height: parent_height,
+                to_height: parent_height,
+            }
+        ]
+    }
+
+    fn resume_parked_child(&mut self, parent_hash: BlockHash) -> Vec<NodeAction> {
+        let Some(parked_block) = self.pending_blocks.remove(&parent_hash) else {
+            return Vec::new();
+        };
+
+        let parent_state = self.blockchain.state.clone();
+        if self.blockchain.add_block(parked_block.block.clone(), &parent_state).is_err() {
+            return vec![NodeAction::ReportEvent {
+                message: "failed importing parked block",
+            }];
+        }
+
+        let block_hash = parked_block.block.hash();
+        let mut actions = vec![
+            NodeAction::PersistBlock {
+                block: parked_block.block,
+            },
+            NodeAction::PersistSnapshot {
+                block_hash,
+                state_bytes: self.blockchain.state.clone().to_bytes(),
+            }
+        ];
+
+        if self.blockchain.head_hash == block_hash {
+            actions.extend(self.resume_parked_child(block_hash));
+        }
+
+        actions
+    }
+
+    fn ingest_block(&mut self, peer: PeerId, block: Block) -> Vec<NodeAction> {
+        if self.blockchain.head_hash == block.previous_hash {
+            let parent_state = self.blockchain.state.clone();
+            if self.blockchain.add_block(block.clone(), &parent_state).is_err() {
+                return vec![NodeAction::ReportEvent {
+                    message: "failed importing block",
+                }];
+            }
+
+            let block_hash = block.hash();
+            let mut actions = vec![
+                NodeAction::PersistBlock {
+                    block,
+                },
+                NodeAction::PersistSnapshot {
+                    block_hash,
+                    state_bytes: self.blockchain.state.clone().to_bytes(),
+                }
+            ];
+
+            if self.blockchain.head_hash == block_hash {
+                actions.extend(self.resume_parked_child(block_hash));
+            }
+
+            actions
+        } else {
+            self.pending_blocks.insert(block.previous_hash, ParkedBlock {
+                peer,
+                block: block.clone(),
+            });
+            vec![NodeAction::LoadSnapshot {
+                block_hash: block.previous_hash,
+            }]
         }
     }
 
@@ -70,15 +161,7 @@ impl NodeEngine {
                 };
 
                 match message {
-                    NetworkMessage::NewBlock(block) => {
-                        let parent_state = self.blockchain.state.clone();
-                        if self.blockchain.add_block(block, &parent_state).is_err() {
-                            return vec![NodeAction::ReportEvent {
-                                message: "failed adding block",
-                            }];
-                        }
-                        vec![NodeAction::FrameReceived { peer }]
-                    }
+                    NetworkMessage::NewBlock(block) => self.ingest_block(peer, block),
                     NetworkMessage::NewTransaction(tx) => {
                         if let Err(error) = self.blockchain.add_transaction(tx) {
                             return vec![NodeAction::ReportEvent { message: error }];
@@ -96,15 +179,19 @@ impl NodeEngine {
                         }]
                     }
                     NetworkMessage::SyncResponse(response) => {
+                        let mut actions = Vec::new();
+
+                        self.pending_requests.retain(|request| request.peer != peer);
+
                         for block in response.blocks {
-                            let parent_state = self.blockchain.state.clone();
-                            if self.blockchain.add_block(block, &parent_state).is_err() {
-                                return vec![NodeAction::ReportEvent {
-                                    message: "failed importing block",
-                                }];
-                            }
+                            actions.extend(self.ingest_block(peer, block));
                         }
-                        vec![NodeAction::FrameReceived { peer }]
+
+                        if actions.is_empty() {
+                            vec![NodeAction::FrameReceived { peer }]
+                        } else {
+                            actions
+                        }
                     }
                 }
             }
@@ -121,10 +208,54 @@ impl NodeEngine {
                 }
             }
 
-            NodeInput::StorageLoaded { block_hash: _, state_bytes: _ } => {
-                vec![NodeAction::ReportEvent {
-                    message: "storage loaded",
-                }]
+            NodeInput::StorageLoaded { block_hash, state_bytes } => {
+                let Some(parked_block) = self.pending_blocks.get(&block_hash) else {
+                    return vec![NodeAction::ReportEvent {
+                        message: "unexpected snapshot result",
+                    }];
+                };
+
+                let Some(state_bytes) = state_bytes else {
+                    return self.request_parent_block(parked_block);
+                };
+
+                let loaded_state = match State::from_bytes(&state_bytes) {
+                    Ok(state) => state,
+                    Err(_) => {
+                        return vec![NodeAction::ReportEvent {
+                            message: "invalid snapshot bytes",
+                        }];
+                    }
+                };
+
+                let Some(parked_block) = self.pending_blocks.remove(&block_hash) else {
+                    return vec![NodeAction::ReportEvent {
+                        message: "parked block disappeared",
+                    }];
+                };
+
+                if self.blockchain.add_block(parked_block.block.clone(), &loaded_state).is_err() {
+                    return vec![NodeAction::ReportEvent {
+                        message: "failed importing parked block",
+                    }];
+                }
+
+                let block_hash = parked_block.block.hash();
+                let mut actions = vec![
+                    NodeAction::PersistBlock {
+                        block: parked_block.block,
+                    },
+                    NodeAction::PersistSnapshot {
+                        block_hash,
+                        state_bytes: self.blockchain.state.clone().to_bytes(),
+                    }
+                ];
+
+                if self.blockchain.head_hash == block_hash {
+                    actions.extend(self.resume_parked_child(block_hash));
+                }
+
+                actions
             }
 
             NodeInput::PersistCompleted { persist_type } => {

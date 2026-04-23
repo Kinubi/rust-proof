@@ -28,7 +28,7 @@ pub enum NodeInput {
     },
     StorageLoaded {
         block_hash: BlockHash,
-        state_bytes: Vec<u8>,
+        state_bytes: Option<Vec<u8>>,
     },
     PersistCompleted {
         persist_type: PersistCompletedType,
@@ -74,6 +74,9 @@ pub enum NodeAction {
     },
     PersistCompleted {
         persist_type: PersistCompletedType,
+    },
+    LoadSnapshot {
+        block_hash: BlockHash,
     },
 }
 
