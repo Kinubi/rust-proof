@@ -1,15 +1,12 @@
-use std::collections::HashMap;
-use rp_core::models::block::Block;
-use rp_core::models::transaction::Transaction;
-use rp_core::state::State;
-use crate::{
-    blockchain::Blockchain,
-    contract::{ BlockHash, NodeAction, NodeInput, PeerId, PersistCompletedType },
-};
+
+use alloc::vec::Vec;
+use alloc::vec;
+use alloc::collections::BTreeMap;
+use crate::{ blockchain::Blockchain, contract::{ NodeAction, NodeInput, PeerId } };
 
 pub struct NodeEngine {
     blockchain: Blockchain,
-    pub peers: HashMap<PeerId, PeerState>,
+    pub peers: BTreeMap<PeerId, PeerState>,
     pub pending_requests: Vec<PendingRequest>,
 }
 
@@ -30,7 +27,7 @@ impl NodeEngine {
     pub fn new(blockchain: Blockchain) -> Self {
         Self {
             blockchain,
-            peers: HashMap::new(),
+            peers: BTreeMap::new(),
             pending_requests: Vec::new(),
         }
     }
@@ -49,25 +46,23 @@ impl NodeEngine {
                     last_seen_ms: 0,
                 });
                 vec![NodeAction::ReportEvent {
-                    message: "peer connected".to_string(),
+                    message: "peer connected",
                 }]
             }
 
             NodeInput::PeerDisconnected { peer } => {
                 self.peers.remove(&peer);
                 vec![NodeAction::ReportEvent {
-                    message: "peer disconnected".to_string(),
+                    message: "peer disconnected",
                 }]
             }
 
             NodeInput::FrameReceived { peer, frame: _frame } => {
-                vec![NodeAction::ReportEvent {
-                    message: format!("frame received from peer {:?}", peer),
-                }]
+                vec![NodeAction::FrameReceived { peer }]
             }
 
             NodeInput::LocalTransactionSubmitted { transaction } => {
-                self.blockchain.add_transaction(transaction);
+                let _ = self.blockchain.add_transaction(transaction);
                 vec![NodeAction::BroadcastFrame {
                     frame: Vec::new(),
                 }]
@@ -75,14 +70,12 @@ impl NodeEngine {
 
             NodeInput::StorageLoaded { block_hash: _, state_bytes: _ } => {
                 vec![NodeAction::ReportEvent {
-                    message: "storage loaded".to_string(),
+                    message: "storage loaded",
                 }]
             }
 
             NodeInput::PersistCompleted { persist_type } => {
-                vec![NodeAction::ReportEvent {
-                    message: format!("persist completed: {:?}", persist_type),
-                }]
+                vec![NodeAction::PersistCompleted { persist_type }]
             }
 
             NodeInput::ImportRequested { peer, from_height, to_height } => {

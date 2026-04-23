@@ -1,5 +1,6 @@
 use rp_core::models::block::Block;
 use rp_core::models::transaction::Transaction;
+use alloc::vec::Vec;
 
 #[derive(Debug)]
 pub enum PersistCompletedType {
@@ -65,7 +66,13 @@ pub enum NodeAction {
         peer: PeerId,
     },
     ReportEvent {
-        message: String,
+        message: &'static str,
+    },
+    FrameReceived {
+        peer: PeerId,
+    },
+    PersistCompleted {
+        persist_type: PersistCompletedType,
     },
 }
 

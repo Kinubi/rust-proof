@@ -1,6 +1,7 @@
 use rp_core::models::block::Block;
 use rp_core::models::transaction::Transaction;
 use serde::{ Deserialize, Serialize };
+use alloc::vec::Vec;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum NetworkMessage {

@@ -1,6 +1,7 @@
 use rp_core::models::transaction::Transaction;
 use rp_core::traits::Hashable;
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
+use alloc::vec::Vec;
 
 /// The Mempool manages unconfirmed transactions, prioritizing them by fee.
 #[derive(Debug, Clone)]
