@@ -1,3 +1,4 @@
+#![allow(unused)]
 use log::{ info, warn };
 
 const TAG: &str = "utils";

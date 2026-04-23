@@ -31,7 +31,7 @@ const IO_RUNTIME_STACK_SIZE: usize = 48 * 1024;
 const NETWORK_STARTUP_DELAY_MS: u64 = 500;
 
 pub fn run() -> Result<(), RuntimeError> {
-    let blockchain = Blockchain::new().map_err(RuntimeError::NodeError)?;
+    let blockchain = Blockchain::new().map_err(RuntimeError::from)?;
     let node_engine = NodeEngine::new(blockchain);
 
     let (event_tx, event_rx) = mpsc::channel::<RuntimeEvent>(EVENT_CHANNEL_CAPACITY);
@@ -47,16 +47,14 @@ pub fn run() -> Result<(), RuntimeError> {
         wake_tx.clone()
     );
     let network_manager = NetworkManager::new(network_rx, event_tx.clone(), [0; 32]);
-    let nvs_storage = NvsStorage::new().unwrap();
+    let nvs_storage = NvsStorage::new().map_err(RuntimeError::StorageInit)?;
     let storage_manager = StorageManager::new(nvs_storage, event_tx.clone(), storage_rx);
 
     let runtime_handle = spawn_node_runtime(node_runtime);
     let io_handle = spawn_io_runtime(event_tx.clone(), network_manager, storage_manager, wake_rx);
 
     esp_block_on(async {
-        wake_tx
-            .send(WakeCommand::Schedule { at_ms: 10_000 }).await
-            .map_err(RuntimeError::WakeChannelSendError)
+        wake_tx.send(WakeCommand::Schedule { at_ms: 10_000 }).await.map_err(RuntimeError::wake_send)
     })?;
     drop(wake_tx);
     drop(event_tx);
@@ -110,11 +108,11 @@ fn run_io_runtime(
             let network_worker = io_executor.spawn(async move {
                 Timer::after(Duration::from_millis(NETWORK_STARTUP_DELAY_MS)).await;
                 let mut network_manager = network_manager;
-                network_manager.run().await.map_err(RuntimeError::NetworkError)
+                network_manager.run().await
             });
             let storage_worker = io_executor.spawn(async move {
                 let mut storage_manager = storage_manager;
-                storage_manager.run().await.map_err(RuntimeError::StorageError)
+                storage_manager.run().await
             });
             let wake_worker = io_executor.spawn(async move {
                 run_wake_task(wake_event_tx, wake_rx).await
@@ -145,7 +143,7 @@ async fn run_wake_task(mut event_tx: EventTx, mut wake_rx: WakeRx) -> Result<(),
         Timer::after(Duration::from_millis(delay_ms)).await;
 
         if let Err(error) = event_tx.send(RuntimeEvent::Tick { now_ms: now_ms() }).await {
-            return Err(RuntimeError::EventChannelSendError(error));
+            return Err(RuntimeError::event_send(error));
         }
     }
 

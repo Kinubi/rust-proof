@@ -2,15 +2,10 @@ use ed25519_dalek::{ Signer, SigningKey };
 use futures::{ SinkExt, StreamExt };
 use log::info;
 use rp_core::{ models::block::Block, traits::{ Hashable, ToBytes } };
-use rp_node::{
-    blockchain::Blockchain,
-    contract::{ NodeInput, PeerId },
-    network::message::NetworkMessage,
-    node_engine::NodeEngine,
-};
+use rp_node::{ blockchain::Blockchain, contract::{ PeerId }, network::message::NetworkMessage };
 
 use crate::{
-    network::errors::NetworkError,
+    runtime::errors::RuntimeError,
     runtime::node::{ EventTx, NetworkCommand, NetworkRx, RuntimeEvent },
 };
 
@@ -27,7 +22,7 @@ impl NetworkManager {
         Self { network_rx, event_tx, peer }
     }
 
-    pub async fn run(&mut self) -> anyhow::Result<(), NetworkError> {
+    pub async fn run(&mut self) -> Result<(), RuntimeError> {
         info!(target: TAG, "Running Network");
 
         let probe_block = build_probe_block();
@@ -43,7 +38,7 @@ impl NetworkManager {
                 peer: self.peer,
                 frame: NetworkMessage::NewBlock(probe_block).to_bytes(),
             }).await
-            .map_err(NetworkError::NetworkChannelSendError)?;
+            .map_err(RuntimeError::event_send)?;
 
         while let Some(command) = self.network_rx.next().await {
             match command {
@@ -97,7 +92,8 @@ fn build_probe_block() -> Block {
 mod tests {
     use super::*;
 
-    use rp_node::contract::NodeAction;
+    use rp_node::contract::{ NodeAction, NodeInput };
+    use rp_node::node_engine::NodeEngine;
 
     #[test]
     fn test_probe_block_frame_is_accepted_by_node_engine() {
