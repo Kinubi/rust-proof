@@ -32,16 +32,20 @@ The core idea is simple:
 
 ## Current repository state
 
-The repository now uses the target crate names at the directory level, but the code inside those crates is still in transition.
+The repository now uses the target crate names at the directory level, and the shared-engine crates have first implementation slices in place.
 
 Current directories map to the target design like this:
 
 - `rp-core/`
-	- still a transitional mixed crate that must be split internally into true `rp-core` and `rp-node` boundaries
+	- first shared blockchain-engine slice
+	- `no_std + alloc`
+	- canonical models, state transition, hashing, and fork-choice logic
 - `rp-node/`
-	- crate skeleton for the shared node engine
+	- first shared node-engine slice
+	- `no_std + alloc`
+	- event and action contract, message codec, import orchestration, and peer-state foundation
 - `rp-runtime/`
-	- runtime shell crate for the desktop or server side
+	- transitional runtime shell crate for the desktop or server side
 - `rp-client/`
 	- wallet and operator application scaffold
 - `erp-runtime/`
@@ -68,6 +72,7 @@ See [PHASE_1_BUILD_PLAN.md](PHASE_1_BUILD_PLAN.md) for the next execution phase.
 
 The workspace is still in a transitional state.
 
+- `rp-core/` and `rp-node/` now compile as shared-engine crates in `no_std + alloc` form
+- the shared engine path now owns the blockchain and node boundaries, while runtime adapters remain outside it
+- `rp-runtime/` and `erp-runtime/` still need their Phase 2 rewrites around the shared node contract
 - `erp-runtime/` keeps embedded target-specific configuration
-- host-oriented and node-engine code are still being split out of the current mixed `rp-core/` crate
-- the crate names now match the target architecture, but the internal code boundaries do not yet

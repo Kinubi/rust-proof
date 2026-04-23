@@ -67,13 +67,13 @@ The repository is not fully migrated yet at the code-boundary level.
 
 Current mapping:
 
-- `rp-core/` is still a transitional mixed crate and needs to be split internally into `rp-core` and `rp-node` boundaries
-- `rp-node/` exists as the shared node-engine crate skeleton
-- `rp-runtime/` exists as the host runtime shell crate skeleton
+- `rp-core/` now holds the first shared blockchain-engine slice in `no_std + alloc` form
+- `rp-node/` now holds the first shared node-engine slice, including the engine contract and import orchestration path
+- `rp-runtime/` remains a transitional host runtime shell and still needs the Phase 2 rewrite around the node contract
 - `rp-client/` is the wallet application scaffold
 - `erp-runtime/` is the embedded runtime scaffold
 
-This roadmap describes the target model, not the current implementation state.
+This roadmap describes the target model, while the current implementation still has transitional runtime shells and follow-on integration work.
 
 ## 4. Design Rules
 
@@ -137,15 +137,14 @@ Separate blockchain rules from node behavior inside the current mixed codebase.
 - move validation and state transition logic behind a smaller engine boundary
 - remove direct storage ownership from engine logic
 
-### Current files that must be split or reduced
+### Current files that define the remaining shared-engine stabilization work
 
 - `rp-core/src/blockchain.rs`
 - `rp-core/src/state.rs`
-- `rp-core/src/mempool.rs`
-- `rp-core/src/storage.rs`
-- `rp-core/src/node.rs`
-- `rp-core/src/network/`
-- `rp-core/src/main.rs`
+- `rp-core/src/models/`
+- `rp-node/src/blockchain.rs`
+- `rp-node/src/contract.rs`
+- `rp-node/src/node_engine.rs`
 
 ### Exit criteria
 

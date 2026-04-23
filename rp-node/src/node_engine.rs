@@ -277,3 +277,242 @@ impl NodeEngine {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ed25519_dalek::{ Signer, SigningKey };
+    use rand::rngs::OsRng;
+    use rp_core::traits::{ Hashable, ToBytes };
+
+    use crate::contract::{ NodeAction, NodeInput };
+    use crate::network::message::{ NetworkMessage, SyncResponse };
+
+    fn build_empty_block(
+        parent: &Block,
+        parent_state: &State,
+        validator: &SigningKey,
+        slot: u64
+    ) -> Block {
+        let mut block = Block {
+            height: parent.height + 1,
+            slot,
+            previous_hash: parent.hash(),
+            validator: validator.verifying_key(),
+            transactions: vec![],
+            signature: None,
+            slash_proofs: vec![],
+            state_root: parent_state.compute_state_root(),
+        };
+        let hash = block.hash();
+        block.signature = Some(validator.sign(&hash));
+        block
+    }
+
+    fn assert_persist_actions(actions: &[NodeAction], expected_hash: [u8; 32]) {
+        assert_eq!(actions.len(), 2);
+
+        match &actions[0] {
+            NodeAction::PersistBlock { block } => {
+                assert_eq!(block.hash(), expected_hash);
+            }
+            _ => panic!("expected PersistBlock action"),
+        }
+
+        match &actions[1] {
+            NodeAction::PersistSnapshot { block_hash, .. } => {
+                assert_eq!(*block_hash, expected_hash);
+            }
+            _ => panic!("expected PersistSnapshot action"),
+        }
+    }
+
+    fn setup_forked_engine() -> (NodeEngine, PeerId, Block, Vec<u8>) {
+        let mut csprng = OsRng;
+        let validator_a = SigningKey::generate(&mut csprng);
+        let validator_b = SigningKey::generate(&mut csprng);
+        let peer = [7u8; 32];
+
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        let genesis = engine.blockchain.get_latest_block().clone();
+        let parent_state_bytes = engine.blockchain.state.to_bytes();
+
+        let block_a = build_empty_block(&genesis, &engine.blockchain.state, &validator_a, 1);
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(block_a.clone()).to_bytes(),
+        });
+        assert_persist_actions(&actions, block_a.hash());
+
+        let block_b = build_empty_block(&genesis, &engine.blockchain.state, &validator_b, 2);
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(block_b).to_bytes(),
+        });
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            NodeAction::LoadSnapshot { block_hash } => {
+                assert_eq!(*block_hash, genesis.hash());
+            }
+            _ => panic!("expected LoadSnapshot action"),
+        }
+
+        let actions = engine.step(NodeInput::StorageLoaded {
+            block_hash: genesis.hash(),
+            state_bytes: Some(parent_state_bytes.clone()),
+        });
+        assert_eq!(engine.blockchain.get_latest_block().slot, 2);
+        assert_persist_actions(&actions, engine.blockchain.head_hash);
+
+        (engine, peer, block_a, parent_state_bytes)
+    }
+
+    #[test]
+    fn test_frame_received_direct_child_persists_block_and_snapshot() {
+        let mut csprng = OsRng;
+        let validator = SigningKey::generate(&mut csprng);
+        let peer = [1u8; 32];
+
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        let genesis = engine.blockchain.get_latest_block().clone();
+        let block = build_empty_block(&genesis, &engine.blockchain.state, &validator, 1);
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(block.clone()).to_bytes(),
+        });
+
+        assert_eq!(engine.blockchain.head_hash, block.hash());
+        assert!(engine.pending_blocks.is_empty());
+        assert_persist_actions(&actions, block.hash());
+    }
+
+    #[test]
+    fn test_frame_received_non_head_child_emits_load_snapshot() {
+        let mut csprng = OsRng;
+        let validator = SigningKey::generate(&mut csprng);
+        let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
+        let child_of_a = build_empty_block(
+            &block_a,
+            &State::from_bytes(&parent_state_bytes).unwrap(),
+            &validator,
+            3,
+        );
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(child_of_a.clone()).to_bytes(),
+        });
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            NodeAction::LoadSnapshot { block_hash } => {
+                assert_eq!(*block_hash, block_a.hash());
+            }
+            _ => panic!("expected LoadSnapshot action"),
+        }
+        assert!(engine.pending_blocks.contains_key(&block_a.hash()));
+    }
+
+    #[test]
+    fn test_storage_loaded_imports_parked_block_and_persists_it() {
+        let mut csprng = OsRng;
+        let validator = SigningKey::generate(&mut csprng);
+        let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
+        let child_of_a = build_empty_block(
+            &block_a,
+            &State::from_bytes(&parent_state_bytes).unwrap(),
+            &validator,
+            3,
+        );
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(child_of_a.clone()).to_bytes(),
+        });
+        assert!(matches!(&actions[0], NodeAction::LoadSnapshot { .. }));
+
+        let actions = engine.step(NodeInput::StorageLoaded {
+            block_hash: block_a.hash(),
+            state_bytes: Some(parent_state_bytes),
+        });
+
+        assert_eq!(engine.blockchain.head_hash, child_of_a.hash());
+        assert!(!engine.pending_blocks.contains_key(&block_a.hash()));
+        assert_persist_actions(&actions, child_of_a.hash());
+    }
+
+    #[test]
+    fn test_storage_loaded_none_requests_parent_block() {
+        let mut csprng = OsRng;
+        let validator = SigningKey::generate(&mut csprng);
+        let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
+        let child_of_a = build_empty_block(
+            &block_a,
+            &State::from_bytes(&parent_state_bytes).unwrap(),
+            &validator,
+            3,
+        );
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::NewBlock(child_of_a).to_bytes(),
+        });
+        assert!(matches!(&actions[0], NodeAction::LoadSnapshot { .. }));
+
+        let actions = engine.step(NodeInput::StorageLoaded {
+            block_hash: block_a.hash(),
+            state_bytes: None,
+        });
+
+        assert_eq!(actions.len(), 2);
+        match &actions[0] {
+            NodeAction::ReportEvent { message } => {
+                assert_eq!(*message, "parent snapshot missing");
+            }
+            _ => panic!("expected ReportEvent action"),
+        }
+        match &actions[1] {
+            NodeAction::RequestBlocks {
+                peer: action_peer,
+                from_height,
+                to_height,
+            } => {
+                assert_eq!(*action_peer, peer);
+                assert_eq!(*from_height, 1);
+                assert_eq!(*to_height, 1);
+            }
+            _ => panic!("expected RequestBlocks action"),
+        }
+    }
+
+    #[test]
+    fn test_sync_response_uses_ingest_path_and_clears_pending_request() {
+        let mut csprng = OsRng;
+        let validator = SigningKey::generate(&mut csprng);
+        let peer = [3u8; 32];
+
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        let genesis = engine.blockchain.get_latest_block().clone();
+        let block = build_empty_block(&genesis, &engine.blockchain.state, &validator, 1);
+
+        let request_actions = engine.step(NodeInput::ImportRequested {
+            peer,
+            from_height: 1,
+            to_height: 1,
+        });
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert!(matches!(&request_actions[0], NodeAction::RequestBlocks { .. }));
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::SyncResponse(SyncResponse {
+                blocks: vec![block.clone()],
+            }).to_bytes(),
+        });
+
+        assert!(engine.pending_requests.is_empty());
+        assert_eq!(engine.blockchain.head_hash, block.hash());
+        assert_persist_actions(&actions, block.hash());
+    }
+}
