@@ -1,6 +1,7 @@
 use rp_core::models::block::Block;
 use rp_core::models::transaction::Transaction;
 use alloc::vec::Vec;
+use crate::errors::ContractError;
 
 #[derive(Debug)]
 pub enum PersistCompletedType {
@@ -86,31 +87,27 @@ pub struct WakeAt {
 }
 
 pub trait Transport {
-    type Error;
-
-    fn send_frame(&mut self, peer: PeerId, frame: Frame) -> Result<(), Self::Error>;
-    fn broadcast_frame(&mut self, frame: Frame) -> Result<(), Self::Error>;
-    fn disconnect_peer(&mut self, peer: PeerId) -> Result<(), Self::Error>;
+    fn send_frame(&mut self, peer: PeerId, frame: Frame) -> Result<(), ContractError>;
+    fn broadcast_frame(&mut self, frame: Frame) -> Result<(), ContractError>;
+    fn disconnect_peer(&mut self, peer: PeerId) -> Result<(), ContractError>;
     fn request_blocks(
         &mut self,
         peer: PeerId,
         from_height: u64,
         to_height: u64
-    ) -> Result<(), Self::Error>;
+    ) -> Result<(), ContractError>;
 }
 
 pub trait Storage {
-    type Error;
-
-    fn save_block(&mut self, block: &Block) -> Result<(), Self::Error>;
-    fn load_block(&mut self, hash: &BlockHash) -> Result<Option<Block>, Self::Error>;
+    fn save_block(&mut self, block: &Block) -> Result<(), ContractError>;
+    fn load_block(&mut self, hash: &BlockHash) -> Result<Option<Block>, ContractError>;
 
     fn save_snapshot(
         &mut self,
         block_hash: &BlockHash,
         state_bytes: &[u8]
-    ) -> Result<(), Self::Error>;
-    fn load_snapshot(&mut self, block_hash: &BlockHash) -> Result<Option<Vec<u8>>, Self::Error>;
+    ) -> Result<(), ContractError>;
+    fn load_snapshot(&mut self, block_hash: &BlockHash) -> Result<Option<Vec<u8>>, ContractError>;
 }
 
 pub trait Clock {
@@ -118,16 +115,12 @@ pub trait Clock {
 }
 
 pub trait Wake {
-    type Error;
-
-    fn schedule_wake(&mut self, at: WakeAt) -> Result<(), Self::Error>;
-    fn cancel_wake(&mut self) -> Result<(), Self::Error>;
+    fn schedule_wake(&mut self, at: WakeAt) -> Result<(), ContractError>;
+    fn cancel_wake(&mut self) -> Result<(), ContractError>;
 }
 
 pub trait Identity {
-    type Error;
-
     fn peer_id(&self) -> PeerId;
     fn public_key(&self) -> Vec<u8>;
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, Self::Error>;
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, ContractError>;
 }

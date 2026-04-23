@@ -1,7 +1,9 @@
-
-use alloc::vec::Vec;
-use alloc::vec;
 use alloc::collections::BTreeMap;
+use alloc::vec;
+use alloc::vec::Vec;
+use rp_core::traits::{ FromBytes, ToBytes };
+
+use crate::network::message::{ NetworkMessage, SyncResponse };
 use crate::{ blockchain::Blockchain, contract::{ NodeAction, NodeInput, PeerId } };
 
 pub struct NodeEngine {
@@ -57,15 +59,66 @@ impl NodeEngine {
                 }]
             }
 
-            NodeInput::FrameReceived { peer, frame: _frame } => {
-                vec![NodeAction::FrameReceived { peer }]
+            NodeInput::FrameReceived { peer, frame } => {
+                let message = match NetworkMessage::from_bytes(&frame) {
+                    Ok(message) => message,
+                    Err(_) => {
+                        return vec![NodeAction::ReportEvent {
+                            message: "invalid frame",
+                        }];
+                    }
+                };
+
+                match message {
+                    NetworkMessage::NewBlock(block) => {
+                        let parent_state = self.blockchain.state.clone();
+                        if self.blockchain.add_block(block, &parent_state).is_err() {
+                            return vec![NodeAction::ReportEvent {
+                                message: "failed adding block",
+                            }];
+                        }
+                        vec![NodeAction::FrameReceived { peer }]
+                    }
+                    NetworkMessage::NewTransaction(tx) => {
+                        if let Err(error) = self.blockchain.add_transaction(tx) {
+                            return vec![NodeAction::ReportEvent { message: error }];
+                        }
+                        vec![NodeAction::FrameReceived { peer }]
+                    }
+                    NetworkMessage::SyncRequest(request) => {
+                        let blocks = self.blockchain.get_blocks(
+                            request.from_height,
+                            request.to_height
+                        );
+                        vec![NodeAction::SendFrame {
+                            peer,
+                            frame: NetworkMessage::SyncResponse(SyncResponse { blocks }).to_bytes(),
+                        }]
+                    }
+                    NetworkMessage::SyncResponse(response) => {
+                        for block in response.blocks {
+                            let parent_state = self.blockchain.state.clone();
+                            if self.blockchain.add_block(block, &parent_state).is_err() {
+                                return vec![NodeAction::ReportEvent {
+                                    message: "failed importing block",
+                                }];
+                            }
+                        }
+                        vec![NodeAction::FrameReceived { peer }]
+                    }
+                }
             }
 
             NodeInput::LocalTransactionSubmitted { transaction } => {
-                let _ = self.blockchain.add_transaction(transaction);
-                vec![NodeAction::BroadcastFrame {
-                    frame: Vec::new(),
-                }]
+                if self.blockchain.add_transaction(transaction.clone()).is_ok() {
+                    vec![NodeAction::BroadcastFrame {
+                        frame: NetworkMessage::NewTransaction(transaction).to_bytes(),
+                    }]
+                } else {
+                    vec![NodeAction::ReportEvent {
+                        message: "invalid transaction",
+                    }]
+                }
             }
 
             NodeInput::StorageLoaded { block_hash: _, state_bytes: _ } => {

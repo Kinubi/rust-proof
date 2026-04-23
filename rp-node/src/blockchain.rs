@@ -1,5 +1,4 @@
 use crate::mempool::Mempool;
-use crate::storage::Storage;
 use crate::errors::NodeError;
 use rp_core::models::block::{ Block, BlockNode };
 use rp_core::models::transaction::Transaction;
@@ -9,7 +8,6 @@ use rp_core::traits::{ Hashable };
 use alloc::vec::Vec;
 use alloc::vec;
 use alloc::collections::BTreeMap;
-use alloc::boxed::Box;
 
 /// The Blockchain represents the entire ledger, including the chain of blocks,
 /// the current state, and the mempool of pending transactions.
@@ -19,12 +17,11 @@ pub struct Blockchain {
     pub head_hash: [u8; 32],
     pub state: State,
     mempool: Mempool,
-    storage: Box<dyn Storage>,
 }
 
 impl Blockchain {
     /// Creates a new blockchain with a genesis block.
-    pub fn new(storage: Box<dyn Storage>) -> Result<Self, NodeError> {
+    pub fn new() -> Result<Self, NodeError> {
         let genesis_block = Block {
             height: 0,
             slot: 0,
@@ -42,14 +39,12 @@ impl Blockchain {
         chain.insert(genesis_hash, BlockNode { block: genesis_block, children: vec![] });
 
         let initial_state = State::new();
-        storage.save_state_snapshot(&genesis_hash, &initial_state)?;
 
         Ok(Self {
             chain,
             head_hash: genesis_hash,
             state: initial_state,
             mempool: Mempool::new(10000),
-            storage,
         })
     }
 
@@ -68,24 +63,16 @@ impl Blockchain {
         }
     }
 
-    pub fn add_block(&mut self, block: Block) -> Result<(), NodeError> {
+    pub fn add_block(&mut self, block: Block, parent_state: &State) -> Result<(), NodeError> {
         let parent_node = self.chain
             .get(&block.previous_hash)
             .ok_or(NodeError::ParentBlockNotFoundError)?;
         let parent_block = &parent_node.block;
 
-        let parent_state = self.storage
-            .get_state_snapshot(&block.previous_hash)?
-            .ok_or(NodeError::ParentSnapshotNotFoundError)?;
-
         let applied_block = validate_and_apply_block(parent_block, &parent_state, &block).map_err(
             |error| NodeError::BlockError(error)
         )?;
         let block_hash = block.hash();
-
-        self.storage.save_block(&block)?;
-
-        self.storage.save_state_snapshot(&block_hash, &applied_block.next_state)?;
 
         if let Some(parent_node_mut) = self.chain.get_mut(&block.previous_hash) {
             if !parent_node_mut.children.contains(&block_hash) {
@@ -143,42 +130,6 @@ mod tests {
     use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
     use rp_core::models::transaction::TransactionData;
-    use rp_core::traits::ToBytes;
-    use spin::Mutex;
-
-    #[derive(Default)]
-    struct TestStorage {
-        blocks: Mutex<BTreeMap<[u8; 32], Vec<u8>>>,
-        states: Mutex<BTreeMap<[u8; 32], State>>,
-    }
-
-    impl Storage for TestStorage {
-        fn save_block(&self, block: &Block) -> Result<(), NodeError> {
-            self.blocks.lock().insert(block.hash(), block.to_bytes());
-            Ok(())
-        }
-
-        fn get_block(&self, hash: &[u8; 32]) -> Result<Option<Vec<u8>>, NodeError> {
-            Ok(self.blocks.lock().get(hash).cloned())
-        }
-
-        fn save_state_root(&self, _height: u64, _root: &[u8; 32]) -> Result<(), NodeError> {
-            Ok(())
-        }
-
-        fn save_state_snapshot(
-            &self,
-            block_hash: &[u8; 32],
-            state: &State
-        ) -> Result<(), NodeError> {
-            self.states.lock().insert(*block_hash, state.clone());
-            Ok(())
-        }
-
-        fn get_state_snapshot(&self, block_hash: &[u8; 32]) -> Result<Option<State>, NodeError> {
-            Ok(self.states.lock().get(block_hash).cloned())
-        }
-    }
 
     #[test]
     fn test_blockchain_add_transaction_and_block() {
@@ -187,9 +138,8 @@ mod tests {
         let sender_keypair = SigningKey::generate(&mut csprng);
         let receiver_keypair = SigningKey::generate(&mut csprng);
 
-        let mut blockchain = Blockchain::new(Box::new(TestStorage::default())).unwrap();
+        let mut blockchain = Blockchain::new().unwrap();
         blockchain.state.balances.insert(*sender_keypair.verifying_key().as_bytes(), 100);
-        blockchain.storage.save_state_snapshot(&blockchain.head_hash, &blockchain.state).unwrap();
 
         let mut tx = Transaction {
             sender: sender_keypair.verifying_key(),
@@ -224,8 +174,9 @@ mod tests {
         };
         let block_hash = block.hash();
         block.signature = Some(validator_keypair.sign(&block_hash[..]));
+        let parent_state = blockchain.state.clone();
 
-        let res = blockchain.add_block(block);
+        let res = blockchain.add_block(block, &parent_state);
         assert!(res.is_ok(), "Failed to add block: {:?}", res.err());
         assert_eq!(blockchain.chain.len(), 2);
         assert_eq!(blockchain.mempool.len(), 0);
@@ -238,11 +189,10 @@ mod tests {
         let validator1 = SigningKey::generate(&mut csprng);
         let validator2 = SigningKey::generate(&mut csprng);
 
-        let mut blockchain = Blockchain::new(Box::new(TestStorage::default())).unwrap();
+        let mut blockchain = Blockchain::new().unwrap();
         blockchain.state.stakes.insert(validator1.verifying_key().to_bytes(), 100);
         blockchain.state.stakes.insert(validator2.verifying_key().to_bytes(), 200);
-        blockchain.storage.save_state_snapshot(&blockchain.head_hash, &blockchain.state).unwrap();
-
+        let parent_state = blockchain.state.clone();
         let expected_validator = blockchain.state.get_expected_validator(1).unwrap();
 
         let wrong_validator = if expected_validator == validator1.verifying_key() {
@@ -268,7 +218,7 @@ mod tests {
         let bad_hash = bad_block.hash();
         bad_block.signature = Some(wrong_validator.sign(&bad_hash[..]));
 
-        let result = blockchain.add_block(bad_block);
+        let result = blockchain.add_block(bad_block, &parent_state);
         assert!(result.is_err());
 
         let correct_validator = if expected_validator == validator1.verifying_key() {
@@ -290,7 +240,7 @@ mod tests {
         let good_hash = good_block.hash();
         good_block.signature = Some(correct_validator.sign(&good_hash[..]));
 
-        assert!(blockchain.add_block(good_block).is_ok());
+        assert!(blockchain.add_block(good_block, &parent_state).is_ok());
     }
 
     #[test]
@@ -299,9 +249,10 @@ mod tests {
         let validator1 = SigningKey::generate(&mut csprng);
         let validator2 = SigningKey::generate(&mut csprng);
 
-        let mut blockchain = Blockchain::new(Box::new(TestStorage::default())).unwrap();
+        let mut blockchain = Blockchain::new().unwrap();
         let parent = blockchain.get_latest_block().clone();
         let state_root = blockchain.state.compute_state_root();
+        let parent_state = blockchain.state.clone();
 
         let mut block_a = Block {
             height: 1,
@@ -329,10 +280,10 @@ mod tests {
         let block_b_hash = block_b.hash();
         block_b.signature = Some(validator2.sign(&block_b_hash[..]));
 
-        assert!(blockchain.add_block(block_a).is_ok());
+        assert!(blockchain.add_block(block_a, &parent_state).is_ok());
         assert_eq!(blockchain.head_hash, block_a_hash);
 
-        assert!(blockchain.add_block(block_b).is_ok());
+        assert!(blockchain.add_block(block_b, &parent_state).is_ok());
         assert_eq!(blockchain.head_hash, block_b_hash);
         assert_eq!(blockchain.get_latest_block().slot, 2);
     }

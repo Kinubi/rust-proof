@@ -1,7 +1,7 @@
 use rp_core::models::block::Block;
 use rp_core::state::State;
 use rp_core::traits::{ FromBytes, Hashable, ToBytes };
-use rp_node::storage::Storage;
+use rp_node::contract::Storage;
 
 /// A concrete runtime storage implementation using the `sled` embedded database.
 pub struct SledStorage {

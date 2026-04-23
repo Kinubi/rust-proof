@@ -9,6 +9,7 @@ tokio = { version = "1.49.0", features = ["full"] }
 serde = { version = "1.0.228", features = ["derive"] }
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "serde"] }
 spin = "0.10.0"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 rand = "0.8.5"

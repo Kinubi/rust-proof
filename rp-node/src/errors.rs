@@ -1,6 +1,6 @@
 use rp_core::errors::BlockError;
-use core::cmp::PartialEq;
-#[derive(Debug)]
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum NodeError {
     BlockError(BlockError),
     ParentBlockNotFoundError,
@@ -9,8 +9,11 @@ pub enum NodeError {
     StateStorageError,
 }
 
-impl PartialEq for NodeError {
-    fn eq(&self, other: &Self) -> bool {
-        self == other
-    }
+#[derive(Debug, PartialEq, Eq)]
+pub enum ContractError {
+    Storage,
+    Transport,
+    Wake,
+    Identity,
+    Other,
 }
