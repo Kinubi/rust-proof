@@ -1,9 +1,12 @@
-use futures::StreamExt;
+use futures::{ SinkExt, StreamExt };
+use rp_core::models::block::Block;
 use rp_node::errors::NodeError;
 use rp_node::node_engine::{ NodeEngine };
-use rp_node::contract::{ NodeAction, NodeInput, PeerId };
+use rp_node::contract::{ BlockHash, NodeAction, NodeInput, PeerId };
 use futures::channel::mpsc;
 use log::{ info, warn };
+
+use crate::runtime::errors::RuntimeError;
 
 const TAG: &str = "node";
 
@@ -45,23 +48,56 @@ pub enum NetworkCommand {
     },
 }
 
+pub enum StorageCommand {
+    PersistBlock {
+        block: Block,
+    },
+    PersistSnapshot {
+        block_hash: BlockHash,
+        state_bytes: Vec<u8>,
+    },
+    LoadSnapshot {
+        block_hash: BlockHash,
+    },
+}
+
+pub enum WakeCommand {
+    Schedule {
+        at_ms: u64,
+    },
+}
+
 pub type EventTx = mpsc::Sender<RuntimeEvent>;
 pub type EventRx = mpsc::Receiver<RuntimeEvent>;
 pub type NetworkTx = mpsc::Sender<NetworkCommand>;
 pub type NetworkRx = mpsc::Receiver<NetworkCommand>;
+pub type StorageTx = mpsc::Sender<StorageCommand>;
+pub type StorageRx = mpsc::Receiver<StorageCommand>;
+pub type WakeTx = mpsc::Sender<WakeCommand>;
+pub type WakeRx = mpsc::Receiver<WakeCommand>;
+
 pub struct NodeRuntime {
     node_engine: NodeEngine,
-    event_rx: mpsc::Receiver<RuntimeEvent>,
-    network_tx: mpsc::Sender<NetworkCommand>,
+    event_rx: EventRx,
+    network_tx: NetworkTx,
+    storage_tx: StorageTx,
+    wake_tx: WakeTx,
 }
 impl NodeRuntime {
-    pub fn new(node_engine: NodeEngine, event_rx: EventRx, network_tx: NetworkTx) -> Self {
-        Self { node_engine, event_rx, network_tx }
+    pub fn new(
+        node_engine: NodeEngine,
+        event_rx: EventRx,
+        network_tx: NetworkTx,
+        storage_tx: StorageTx,
+        wake_tx: WakeTx
+    ) -> Self {
+        Self { node_engine, event_rx, network_tx, storage_tx, wake_tx }
     }
 
-    pub async fn run(&mut self) -> anyhow::Result<(), NodeError> {
+    pub async fn run(&mut self) -> anyhow::Result<(), RuntimeError> {
+        info!(target: TAG, "Running Runtime");
         loop {
-            let mut actions: Vec<NodeAction> = Vec::new();
+            let actions: Vec<NodeAction>;
             match self.event_rx.next().await.unwrap() {
                 RuntimeEvent::Tick { now_ms } => {
                     actions = self.node_engine.step(NodeInput::Tick { now_ms });
@@ -69,7 +105,19 @@ impl NodeRuntime {
                 RuntimeEvent::PeerConnected { peer } => {
                     actions = self.node_engine.step(NodeInput::PeerConnected { peer });
                 }
-                _ => {}
+                RuntimeEvent::PeerDisconnected { peer } => {
+                    actions = self.node_engine.step(NodeInput::PeerDisconnected { peer });
+                }
+                RuntimeEvent::FrameReceived { peer, frame } => {
+                    info!(target: TAG, "Frame: {:?} received", frame);
+                    actions = self.node_engine.step(NodeInput::FrameReceived { peer, frame });
+                }
+                RuntimeEvent::StorageLoaded { block_hash, state_bytes } => {
+                    actions = self.node_engine.step(NodeInput::StorageLoaded {
+                        block_hash,
+                        state_bytes,
+                    });
+                }
             }
             for action in actions {
                 let _ = self.handle_action(action).await;
@@ -77,13 +125,79 @@ impl NodeRuntime {
         }
     }
 
-    async fn handle_action(&mut self, action: NodeAction) -> anyhow::Result<()> {
+    async fn handle_action(&mut self, action: NodeAction) -> anyhow::Result<(), RuntimeError> {
         match action {
+            NodeAction::BroadcastFrame { frame } => {
+                self.network_tx
+                    .send(NetworkCommand::BroadcastFrame { frame }).await
+                    .map_err(|error| {
+                        return RuntimeError::NetworkChannelSendError(error);
+                    })
+            }
+            NodeAction::DisconnectPeer { peer } => {
+                self.network_tx
+                    .send(NetworkCommand::DisconnectPeer { peer }).await
+                    .map_err(|error| {
+                        return RuntimeError::NetworkChannelSendError(error);
+                    })
+            }
+            NodeAction::FrameReceived { peer } => {
+                info!(target: TAG, "Peer frame from {:?} received, but no action", peer);
+                Ok(())
+            }
+            NodeAction::LoadSnapshot { block_hash } => {
+                self.storage_tx
+                    .send(StorageCommand::LoadSnapshot { block_hash }).await
+                    .map_err(|error| {
+                        return RuntimeError::StorageChannelSendError(error);
+                    })
+            }
+            NodeAction::PersistBlock { block } => {
+                self.storage_tx.send(StorageCommand::PersistBlock { block }).await.map_err(|error| {
+                    return RuntimeError::StorageChannelSendError(error);
+                })
+            }
+            NodeAction::PersistCompleted { persist_type } => {
+                info!(target: TAG, "Persist: {:?} completed", persist_type);
+                Ok(())
+            }
+            NodeAction::PersistSnapshot { block_hash, state_bytes } => {
+                self.storage_tx
+                    .send(StorageCommand::PersistSnapshot {
+                        block_hash,
+                        state_bytes,
+                    }).await
+                    .map_err(|error| {
+                        return RuntimeError::StorageChannelSendError(error);
+                    })
+            }
             NodeAction::ReportEvent { message } => {
                 info!(target: TAG, "{message}");
                 Ok(())
             }
-            _ => { Ok(()) }
+            NodeAction::RequestBlocks { peer, from_height, to_height } => {
+                self.network_tx
+                    .send(NetworkCommand::RequestBlocks {
+                        peer,
+                        from_height,
+                        to_height,
+                    }).await
+                    .map_err(|error| {
+                        return RuntimeError::NetworkChannelSendError(error);
+                    })
+            }
+            NodeAction::ScheduleWake { at_ms } => {
+                self.wake_tx.send(WakeCommand::Schedule { at_ms }).await.map_err(|error| {
+                    return RuntimeError::WakeChannelSendError(error);
+                })
+            }
+            NodeAction::SendFrame { peer, frame } => {
+                self.network_tx
+                    .send(NetworkCommand::SendFrame { peer, frame }).await
+                    .map_err(|error| {
+                        return RuntimeError::NetworkChannelSendError(error);
+                    })
+            }
         }
     }
 }

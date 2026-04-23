@@ -7,21 +7,30 @@
 //! Depending on your target and the board you are using you should change the pins.
 //! If your board doesn't have on-board LEDs don't forget to add an appropriate resistor.
 
+use erp_runtime::network::manager::NetworkManager;
+use erp_runtime::runtime::errors::RuntimeError;
 use esp_idf_hal::peripherals::Peripherals;
 
-use anyhow::Context;
+use anyhow::{ Context, Error };
 use embassy_time::{ Duration, Timer, Instant }; // Using Embassy for timing
 use esp_idf_hal::task::block_on;
 use esp_idf_svc::eventloop::EspSystemEventLoop;
 use esp_idf_svc::log::EspLogger;
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{ AsyncWifi, ClientConfiguration, Configuration, EspWifi };
-use futures::future::join;
+use futures::future::{ join };
 use futures::channel::mpsc;
-use futures::SinkExt;
-use erp_runtime::runtime;
-use log::{ info, warn };
-use erp_runtime::runtime::node::{ EventTx, NetworkCommand, NodeRuntime, RuntimeEvent };
+use futures::{ SinkExt, StreamExt };
+
+use erp_runtime::runtime::node::{
+    EventTx,
+    NetworkCommand,
+    NodeRuntime,
+    RuntimeEvent,
+    StorageCommand,
+    WakeCommand,
+    WakeRx,
+};
 use rp_node::blockchain::{ Blockchain };
 use rp_node::errors::NodeError;
 use rp_node::node_engine::NodeEngine;
@@ -66,33 +75,44 @@ const TAG: &str = "erp";
 //     Err(anyhow::anyhow!("Wi-Fi init failed"))
 // }
 
-fn main() -> anyhow::Result<(), NodeError> {
+fn main() -> Result<(), RuntimeError> {
     esp_idf_hal::sys::link_patches();
     EspLogger::initialize_default();
-    let block_chain = Blockchain::new()?;
+
+    let block_chain = Blockchain::new().map_err(RuntimeError::NodeError)?;
     let node_engine = NodeEngine::new(block_chain);
 
     let (event_tx, event_rx) = mpsc::channel::<RuntimeEvent>(32);
     let (network_tx, network_rx) = mpsc::channel::<NetworkCommand>(32);
-    let mut node_runtime = NodeRuntime::new(node_engine, event_rx, network_tx);
+    let (storage_tx, _storage_rx) = mpsc::channel::<StorageCommand>(32);
+    let (mut wake_tx, wake_rx) = mpsc::channel::<WakeCommand>(8);
 
-    // let peripherals = Peripherals::take()?;
-    // let sys_loop = EspSystemEventLoop::take()?;
-    // let nvs = EspDefaultNvsPartition::take()?;
+    let mut node_runtime = NodeRuntime::new(
+        node_engine,
+        event_rx,
+        network_tx,
+        storage_tx,
+        wake_tx.clone()
+    );
 
-    // let mut wifi = AsyncWifi::wrap(
-    //     EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs))?,
-    //     sys_loop,
-    //     esp_idf_svc::timer::EspTimerService::new()?
-    // )?;
-
-    // if let Some(version) = get_slave_firmware_version().ok() {
-    //     print_slave_firmware_version(version);
-    // }
+    let mut network_manager = NetworkManager::new(network_rx, event_tx.clone(), [0; 32]);
 
     block_on(async {
-        // Run both Wifi and Main loop concurrently
-        let _node_result = join(node_runtime.run(), tick_task(event_tx)).await;
+        let runtime_fut = node_runtime.run();
+        let wake_fut = wake_task(event_tx.clone(), wake_rx);
+        let network_fut = network_manager.run();
+
+        wake_tx.send(WakeCommand::Schedule { at_ms: 10000 }).await;
+
+        let (runtime_res, wake_res, network_res) = futures::join!(
+            runtime_fut,
+            wake_fut,
+            network_fut
+        );
+
+        runtime_res?;
+        wake_res?;
+        let _ = network_res.map_err(RuntimeError::NetworkError);
         Ok(())
     })
 }
@@ -108,12 +128,14 @@ fn now_ms() -> u64 {
     Instant::now().as_millis() as u64
 }
 
-async fn tick_task(mut event_tx: EventTx) {
-    loop {
-        Timer::after(Duration::from_millis(1000)).await;
+async fn wake_task(mut event_tx: EventTx, mut wake_rx: WakeRx) -> Result<(), RuntimeError> {
+    while let Some(WakeCommand::Schedule { at_ms }) = wake_rx.next().await {
+        let delay_ms = at_ms.saturating_sub(now_ms());
+        Timer::after(Duration::from_millis(delay_ms)).await;
 
-        if event_tx.send(RuntimeEvent::Tick { now_ms: now_ms() }).await.is_err() {
-            break;
+        if let Err(error) = event_tx.send(RuntimeEvent::Tick { now_ms: now_ms() }).await {
+            return Err(RuntimeError::EventChannelSendError(error));
         }
     }
+    Ok(())
 }
