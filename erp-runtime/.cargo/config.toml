@@ -1,0 +1,23 @@
+[build]
+target = "riscv32imafc-esp-espidf"
+
+[target.'cfg(target_os = "espidf")']
+linker = "ldproxy"
+runner = "espflash flash --monitor"
+rustflags = [ "--cfg",  "espidf_time64"]
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+MCU = "esp32p4"
+ESP_IDF_VERSION = "v6.0"
+ESP_IDF_TOOLS_INSTALL_DIR = "workspace"
+
+# Tell esp-idf-sys/embuild to treat this crate directory as its workspace dir.
+# That keeps .embuild, sdkconfig-relative paths, and component-manager lockfiles
+# local to erp-runtime instead of the repo root.
+CARGO_WORKSPACE_DIR = { value = "", relative = true }
+
+# Uncomment and adjust this only if you later move the Cargo target dir again.
+#CARGO_WORKSPACE_DIR = { value = "..", relative = true }

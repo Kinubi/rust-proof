@@ -1,0 +1,51 @@
+[package]
+name = "erp-runtime"
+version = "0.1.0"
+authors = ["Kinubi <barendbth@gmail.com>"]
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "erp-runtime"
+harness = false # do not use the built-in cargo test harness -> resolve rust-analyzer errors
+
+
+[dependencies]
+log = "0.4"
+esp-idf-svc = { version = "0.52.1", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
+# Remove `generic-queue-8` if you plan to use `embassy-time` WITH `embassy-executor`
+embassy-time = { version = "0.5", features = ["generic-queue-8"] }
+esp-idf-hal = "0.46.2"
+anyhow = "1.0.102"
+fugit = "0.3.9"
+futures = "0.3.32"
+
+[build-dependencies]
+embuild = "0.33"
+
+[package.metadata.esp-idf-sys]
+mcu = "esp32p4"
+esp_idf_version = "v6.0"
+esp_idf_tools_install_dir = "workspace"
+esp_idf_sdkconfig_defaults = ["sdkconfig.defaults"]
+
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_wifi_remote", version = "1.5.1" }
+[[package.metadata.esp-idf-sys.extra_components]]
+remote_component = { name = "espressif/esp_hosted", version = "2.12.3" }
+
+
+[profile.dev]
+debug = true
+opt-level = "z"
+
+[profile.release]
+opt-level = "s"
+
+[patch.crates-io]
+esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal.git", branch = "master" }
+esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git", branch = "master" }
+esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys.git", branch = "master" }

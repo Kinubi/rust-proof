@@ -1,0 +1,23 @@
+{
+    // 1. Tell RA about both projects explicitly
+    "rust-analyzer.linkedProjects": [
+        "Cargo.toml",              // The x86 Root Project
+        "erp-runtime/Cargo.toml"   // The ESP Sub-Project
+    ],
+
+    // 2. CRITICAL: Remove any global target setting
+    // If you leave this set, it overrides local configs!
+    "rust-analyzer.cargo.target": null,
+
+    // 3. Separate the flycheck commands?
+    // Usually not needed if linkedProjects is set, but ensures isolation:
+    "rust-analyzer.cargo.extraArgs": [],
+
+    
+    // 4. Optional: Prevent x86 checks from checking the ESP folder
+    "files.watcherExclude": {
+        "**/erp-runtime/target/**": true
+    },
+    // This tells RA to find its own way if the above paths fail
+    "rust-analyzer.workspace.discoverConfig": null
+}

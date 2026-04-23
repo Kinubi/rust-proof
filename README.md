@@ -1,31 +1,78 @@
 # rust-proof workspace
 
-`rust-proof` is split into a core node, a desktop client, and an embedded ESP32 client.
+`rust-proof` is being redesigned around a single blockchain engine, a single node engine, multiple runtimes, and one wallet application.
 
-## Workspace layout
+## Target architecture
 
-- `rust-proof-core/`: core blockchain crate and node binary
-- `rust-proof-client/`: desktop or PC client scaffold
-- `erp-client/`: embedded ESP32 firmware client
+The target logical crates are:
 
-## Why this layout works
+- `rp-core`
+	- blockchain engine
+	- `no_std + alloc`
+- `rp-node`
+	- device-agnostic node engine
+	- `no_std + alloc`
+- `rp-runtime`
+	- desktop or server runtime that hosts `rp-node`
+	- `std`
+- `erp-runtime`
+	- embedded runtime that hosts `rp-node`
+	- target-specific embedded integration
+- `rp-client`
+	- wallet and operator application
+	- `std`
 
-- `rust-proof-core` keeps the chain, node, networking, and persistence logic together.
-- `rust-proof-client` can grow into a wallet or operator CLI without inheriting embedded toolchain constraints.
-- `erp-client` stays isolated because it has its own target, linker, flashing flow, and size tuning.
+The core idea is simple:
 
-The workspace deliberately keeps the embedded client out of `default-members`, so plain desktop commands such as `cargo check`, `cargo test`, and `cargo run -p rust-proof-client` do not require the ESP-IDF toolchain.
+- consensus and state transition live in one place
+- node behavior and sync logic live in one place
+- desktop and embedded nodes share the same node engine
+- runtimes implement transport, storage, timers, and process integration
+- the wallet is a separate application layer and may optionally ship static web assets that a runtime can host
 
-## Common commands
+## Current repository state
 
-```sh
-cargo check
-cargo test -p rust-proof
-cargo run -p rust-proof
-cargo run -p rust-proof-client -- --help
-cargo build -p erp
-```
+The repository now uses the target crate names at the directory level, and the shared-engine crates have first implementation slices in place.
 
-## Next structural step, if needed
+Current directories map to the target design like this:
 
-If the desktop and embedded clients start sharing transaction or wire types that should not depend on the full node crate, add a fourth crate such as `rust-proof-protocol` or `rust-proof-types`. For now, this three-part split is a solid base.
+- `rp-core/`
+	- first shared blockchain-engine slice
+	- `no_std + alloc`
+	- canonical models, state transition, hashing, and fork-choice logic
+- `rp-node/`
+	- first shared node-engine slice
+	- `no_std + alloc`
+	- event and action contract, message codec, import orchestration, and peer-state foundation
+- `rp-runtime/`
+	- transitional runtime shell crate for the desktop or server side
+- `rp-client/`
+	- wallet and operator application scaffold
+- `erp-runtime/`
+	- embedded runtime scaffold
+
+## Design rules
+
+1. `rp-core` owns blockchain rules and nothing else.
+2. `rp-node` owns node behavior and nothing else.
+3. `rp-runtime` and `erp-runtime` are thin runtime shells.
+4. Desktop and embedded peers use the same node engine.
+5. The embedded side is a first-class peer runtime, not a second-class client.
+6. The wallet lives in `rp-client`, not inside the node engine.
+
+## Detailed design
+
+See [docs/system-design.md](docs/system-design.md) for the full architecture.
+
+See [ROADMAP.md](ROADMAP.md) for the migration plan.
+
+See [PHASE_1_BUILD_PLAN.md](PHASE_1_BUILD_PLAN.md) for the next execution phase.
+
+## Current build notes
+
+The workspace is still in a transitional state.
+
+- `rp-core/` and `rp-node/` now compile as shared-engine crates in `no_std + alloc` form
+- the shared engine path now owns the blockchain and node boundaries, while runtime adapters remain outside it
+- `rp-runtime/` and `erp-runtime/` still need their Phase 2 rewrites around the shared node contract
+- `erp-runtime/` keeps embedded target-specific configuration

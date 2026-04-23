@@ -1,26 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
-    "rust-proof-core",
-    "rust-proof-client",
-    "erp-client",
+    "rp-core",
+    "rp-node",
+    "rp-runtime",
+    "rp-client",
 ]
 default-members = [
-    "rust-proof-core",
-    "rust-proof-client",
+    "rp-core",
+    "rp-node",
+    "rp-runtime",
+    "rp-client",
+
 ]
-
-[profile.dev.package.erp-client]
-debug = true
-opt-level = "z"
-
-[profile.release.package.erp-client]
-opt-level = "s"
-
-
-
-[patch.crates-io]
-esp-idf-hal = { git = "https://github.com/esp-rs/esp-idf-hal.git", branch = "master" }
-esp-idf-svc = { git = "https://github.com/esp-rs/esp-idf-svc.git", branch = "master" }
-esp-idf-sys = { git = "https://github.com/esp-rs/esp-idf-sys.git", branch = "master" }
-
