@@ -133,7 +133,7 @@ impl NodeManager {
             };
 
             for action in actions {
-                let _ = self.handle_action(action).await;
+                self.handle_action(action).await?;
             }
         }
     }

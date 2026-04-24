@@ -38,16 +38,26 @@ Those belong in `rp-core` and `rp-node`.
 
 ## Current state
 
-Today this crate is still in embedded bring-up mode.
+This crate has moved past pure embedded bring-up and now contains the first real runtime-host slice around `rp-node`.
 
-It currently focuses on:
+Current implemented pieces include:
+
+- runtime bootstrap that constructs `NodeEngine`
+- runtime event loop and `NodeAction` dispatch
+- NVS-backed snapshot and block persistence
+- wake scheduling, including a test-only startup heartbeat
+- runtime identity and signing integration
+
+It still includes bring-up-oriented behavior in a few places, especially transport. The major incomplete area is still the embedded network adapter.
+
+It currently also focuses on:
 
 - ESP32-P4 host firmware in Rust
 - ESP-Hosted integration for Wi-Fi via an ESP32-C6 co-processor
 - async Wi-Fi connection flow using `AsyncWifi`
 - embedded task and timing experiments
 
-That means the crate is still a runtime prototype, not yet the finished embedded node runtime.
+That means the crate is now an in-progress embedded runtime host, but not yet the finished embedded node runtime.
 
 ## Hardware direction
 

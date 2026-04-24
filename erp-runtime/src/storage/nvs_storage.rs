@@ -3,9 +3,11 @@ use core::fmt::Write;
 use embedded_svc::storage::RawStorage;
 use esp_idf_hal::sys::EspError;
 use esp_idf_svc::nvs::{ EspKeyValueStorage, EspNvs, EspNvsPartition, NvsDefault };
+use log::warn;
 use rp_core::{ models::block::Block, traits::Hashable };
 use rp_node::{ contract::{ BlockHash, Storage }, errors::ContractError };
 use std::string::String;
+
 pub struct NvsStorage {
     nvs_kv_storage: EspKeyValueStorage<NvsDefault>,
 }
@@ -15,6 +17,7 @@ const BLOCK_KEY_PREFIX: char = 'b';
 const SNAPSHOT_KEY_PREFIX: char = 's';
 const HASH_BUCKET_BYTES: usize = 6;
 const LATEST_SNAPSHOT_KEY: &str = "latest_snap";
+const TAG: &str = "storage";
 
 impl NvsStorage {
     pub fn new() -> Result<Self, EspError> {
@@ -144,15 +147,52 @@ impl NvsStorage {
     pub fn load_latest_snapshot_bundle(
         &mut self
     ) -> Result<Option<(Block, Vec<u8>)>, ContractError> {
-        let Some(block_hash) = self.read_hash_key(LATEST_SNAPSHOT_KEY)? else {
-            return Ok(None);
+        let block_hash = match self.read_hash_key(LATEST_SNAPSHOT_KEY) {
+            Ok(Some(block_hash)) => block_hash,
+            Ok(None) => return Ok(None),
+            Err(_) => {
+                warn!(
+                    target: TAG,
+                    "ignoring invalid latest snapshot pointer; starting without a restored snapshot"
+                );
+                return Ok(None);
+            }
         };
 
-        let Some(block) = self.load_block(&block_hash)? else {
-            return Err(ContractError::Storage);
+        let block = match self.load_block(&block_hash) {
+            Ok(Some(block)) => block,
+            Ok(None) => {
+                warn!(
+                    target: TAG,
+                    "latest snapshot pointer references a missing block; starting without a restored snapshot"
+                );
+                return Ok(None);
+            }
+            Err(_) => {
+                warn!(
+                    target: TAG,
+                    "latest snapshot pointer references an invalid block; starting without a restored snapshot"
+                );
+                return Ok(None);
+            }
         };
-        let Some(state_bytes) = self.load_snapshot(&block_hash)? else {
-            return Err(ContractError::Storage);
+
+        let state_bytes = match self.load_snapshot(&block_hash) {
+            Ok(Some(state_bytes)) => state_bytes,
+            Ok(None) => {
+                warn!(
+                    target: TAG,
+                    "latest snapshot pointer references missing snapshot bytes; starting without a restored snapshot"
+                );
+                return Ok(None);
+            }
+            Err(_) => {
+                warn!(
+                    target: TAG,
+                    "latest snapshot pointer references invalid snapshot bytes; starting without a restored snapshot"
+                );
+                return Ok(None);
+            }
         };
 
         Ok(Some((block, state_bytes)))

@@ -1,13 +1,13 @@
 use embassy_time::{ Duration, Instant, Timer };
 use futures::{ SinkExt, StreamExt };
-use rp_node::{ contract::{ Wake, WakeAt }, errors::ContractError };
+use rp_node::{ contract::{ Clock, Wake, WakeAt }, errors::ContractError };
 
 use crate::runtime::{
     errors::RuntimeError,
     manager::{ EventTx, RuntimeEvent, WakeCommand, WakeRx },
 };
 
-const HEARTBEAT_MS: u64 = 1_000;
+const TEST_HEARTBEAT_MS: u64 = 1_000;
 
 pub struct WakeManager {
     wake_at: Option<u64>,
@@ -17,7 +17,7 @@ pub struct WakeManager {
 
 impl WakeManager {
     pub fn new(event_tx: EventTx, wake_rx: WakeRx) -> Self {
-        Self { wake_at: Some(HEARTBEAT_MS), event_tx, wake_rx }
+        Self { wake_at: Some(TEST_HEARTBEAT_MS), event_tx, wake_rx }
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
@@ -34,10 +34,6 @@ impl WakeManager {
             }
         }
         Ok(())
-    }
-
-    fn now_ms(&self) -> u64 {
-        Instant::now().as_millis() as u64
     }
 
     async fn wake_task(&mut self) -> Result<(), RuntimeError> {
@@ -67,5 +63,11 @@ impl Wake for WakeManager {
     fn cancel_wake(&mut self) -> Result<(), ContractError> {
         self.wake_at = None;
         Ok(())
+    }
+}
+
+impl Clock for WakeManager {
+    fn now_ms(&self) -> u64 {
+        Instant::now().as_millis() as u64
     }
 }

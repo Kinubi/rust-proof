@@ -3,6 +3,20 @@
 Date: 2026-04-23  
 Status: execution plan for the first runtime-hosting phase after shared-engine extraction
 
+## Status Update: 2026-04-24
+
+`erp-runtime/` has moved beyond pure bring-up and now hosts a first embedded runtime shell around `rp-node`.
+
+Current implemented slices include:
+
+- runtime bootstrap that constructs `NodeEngine`
+- runtime event pump and `NodeAction` dispatch
+- NVS-backed snapshot and block persistence
+- wake scheduling plus a test-only startup heartbeat
+- runtime identity selection and signing integration
+
+The largest remaining Phase 2 gap is transport: the embedded network adapter is still mostly scaffolding, and repeatable hardware smoke validation is still required.
+
 ## 1. Purpose
 
 Phase 2 begins after the shared-engine split.
