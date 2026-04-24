@@ -4,6 +4,8 @@ use rp_node::{ contract::{ Wake, WakeAt }, errors::ContractError };
 
 use crate::runtime::{ errors::RuntimeError, node::{ EventTx, RuntimeEvent, WakeCommand, WakeRx } };
 
+const HEARTBEAT_MS: u64 = 1_000;
+
 pub struct WakeManager {
     wake_at: Option<u64>,
     event_tx: EventTx,
@@ -12,7 +14,7 @@ pub struct WakeManager {
 
 impl WakeManager {
     pub fn new(event_tx: EventTx, wake_rx: WakeRx) -> Self {
-        Self { wake_at: Some(1000), event_tx, wake_rx }
+        Self { wake_at: Some(HEARTBEAT_MS), event_tx, wake_rx }
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
