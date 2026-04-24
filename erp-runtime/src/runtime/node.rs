@@ -69,6 +69,7 @@ pub enum WakeCommand {
     Schedule {
         at_ms: u64,
     },
+    Cancel,
 }
 
 pub type EventTx = mpsc::Sender<RuntimeEvent>;

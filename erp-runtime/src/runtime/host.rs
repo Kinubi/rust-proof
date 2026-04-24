@@ -43,7 +43,7 @@ pub fn run() -> Result<(), RuntimeError> {
     let network_manager = NetworkManager::new(network_rx, event_tx.clone(), [0; 32]);
     let nvs_storage = NvsStorage::new().map_err(RuntimeError::StorageInit)?;
     let storage_manager = StorageManager::new(nvs_storage, event_tx.clone(), storage_rx);
-    let wake_manager = WakeManager::new(1000, event_tx.clone(), wake_rx);
+    let wake_manager = WakeManager::new(event_tx.clone(), wake_rx);
 
     let runtime_handle = spawn_node_runtime(node_runtime);
     let io_handle = spawn_io_runtime(network_manager, storage_manager, wake_manager);
