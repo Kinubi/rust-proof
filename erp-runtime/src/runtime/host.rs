@@ -6,12 +6,13 @@ use futures::channel::mpsc;
 use log::error;
 use std::thread;
 
+use crate::identity::manager::IdentityManager;
 use crate::network::manager::NetworkManager;
 use crate::wake::manager::WakeManager;
 use crate::runtime::errors::RuntimeError;
-use crate::runtime::node::{
+use crate::runtime::manager::{
     NetworkCommand,
-    NodeRuntime,
+    NodeManager,
     RuntimeEvent,
     StorageCommand,
     WakeCommand,
@@ -38,9 +39,10 @@ pub fn run() -> Result<(), RuntimeError> {
     let (network_tx, network_rx) = mpsc::channel::<NetworkCommand>(NETWORK_CHANNEL_CAPACITY);
     let (storage_tx, storage_rx) = mpsc::channel::<StorageCommand>(STORAGE_CHANNEL_CAPACITY);
     let (wake_tx, wake_rx) = mpsc::channel::<WakeCommand>(WAKE_CHANNEL_CAPACITY);
+    let identity_manager = IdentityManager::select()?;
 
-    let node_runtime = NodeRuntime::new(node_engine, event_rx, network_tx, storage_tx, wake_tx);
-    let network_manager = NetworkManager::new(network_rx, event_tx.clone(), [0; 32]);
+    let node_runtime = NodeManager::new(node_engine, event_rx, network_tx, storage_tx, wake_tx);
+    let network_manager = NetworkManager::new(network_rx, event_tx.clone(), identity_manager);
     let nvs_storage = NvsStorage::new().map_err(RuntimeError::StorageInit)?;
     let storage_manager = StorageManager::new(nvs_storage, event_tx.clone(), storage_rx);
     let wake_manager = WakeManager::new(event_tx.clone(), wake_rx);
@@ -54,7 +56,7 @@ pub fn run() -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn spawn_node_runtime(node_runtime: NodeRuntime) -> thread::JoinHandle<Result<(), RuntimeError>> {
+fn spawn_node_runtime(node_runtime: NodeManager) -> thread::JoinHandle<Result<(), RuntimeError>> {
     thread::Builder
         ::new()
         .name("node-runtime".into())

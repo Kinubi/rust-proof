@@ -1,12 +1,13 @@
 use futures::{ SinkExt, StreamExt };
 use log::{ error, info };
 use rp_core::traits::ToBytes;
-use rp_node::{ contract::{ PeerId }, network::message::NetworkMessage };
+use rp_node::{ contract::Identity, network::message::NetworkMessage };
 
 use crate::{
+    identity::manager::IdentityManager,
     runtime::block_signing::build_probe_block,
     runtime::errors::RuntimeError,
-    runtime::node::{ EventTx, NetworkCommand, NetworkRx, RuntimeEvent },
+    runtime::manager::{ EventTx, NetworkCommand, NetworkRx, RuntimeEvent },
 };
 
 const TAG: &str = "manager";
@@ -14,18 +15,18 @@ const TAG: &str = "manager";
 pub struct NetworkManager {
     network_rx: NetworkRx,
     event_tx: EventTx,
-    peer: PeerId,
+    identity: IdentityManager,
 }
 
 impl NetworkManager {
-    pub fn new(network_rx: NetworkRx, event_tx: EventTx, peer: PeerId) -> Self {
-        Self { network_rx, event_tx, peer }
+    pub fn new(network_rx: NetworkRx, event_tx: EventTx, identity: IdentityManager) -> Self {
+        Self { network_rx, event_tx, identity }
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
         info!(target: TAG, "Running Network");
 
-        match build_probe_block() {
+        match build_probe_block(&self.identity) {
             Ok(probe_block) => {
                 info!(
                     target: TAG,
@@ -36,7 +37,7 @@ impl NetworkManager {
 
                 self.event_tx
                     .send(RuntimeEvent::FrameReceived {
-                        peer: self.peer,
+                        peer: self.identity.peer_id(),
                         frame: NetworkMessage::NewBlock(probe_block).to_bytes(),
                     }).await
                     .map_err(RuntimeError::event_send)?;

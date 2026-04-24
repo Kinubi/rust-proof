@@ -2,7 +2,10 @@ use embassy_time::{ Duration, Instant, Timer };
 use futures::{ SinkExt, StreamExt };
 use rp_node::{ contract::{ Wake, WakeAt }, errors::ContractError };
 
-use crate::runtime::{ errors::RuntimeError, node::{ EventTx, RuntimeEvent, WakeCommand, WakeRx } };
+use crate::runtime::{
+    errors::RuntimeError,
+    manager::{ EventTx, RuntimeEvent, WakeCommand, WakeRx },
+};
 
 const HEARTBEAT_MS: u64 = 1_000;
 

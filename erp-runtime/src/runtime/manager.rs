@@ -81,14 +81,14 @@ pub type StorageRx = mpsc::Receiver<StorageCommand>;
 pub type WakeTx = mpsc::Sender<WakeCommand>;
 pub type WakeRx = mpsc::Receiver<WakeCommand>;
 
-pub struct NodeRuntime {
+pub struct NodeManager {
     node_engine: NodeEngine,
     event_rx: EventRx,
     network_tx: NetworkTx,
     storage_tx: StorageTx,
     wake_tx: WakeTx,
 }
-impl NodeRuntime {
+impl NodeManager {
     pub fn new(
         node_engine: NodeEngine,
         event_rx: EventRx,

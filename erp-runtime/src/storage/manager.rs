@@ -3,7 +3,7 @@ use rp_node::contract::Storage;
 
 use crate::{ storage::nvs_storage::NvsStorage };
 use crate::runtime::errors::RuntimeError;
-use crate::runtime::node::{ EventTx, StorageCommand, StorageRx };
+use crate::runtime::manager::{ EventTx, StorageCommand, StorageRx };
 pub struct StorageManager {
     storage: NvsStorage,
     event_tx: EventTx,
@@ -29,7 +29,7 @@ impl StorageManager {
                     };
 
                     self.event_tx
-                        .send(crate::runtime::node::RuntimeEvent::LatestSnapshotLoaded {
+                        .send(crate::runtime::manager::RuntimeEvent::LatestSnapshotLoaded {
                             block,
                             state_bytes,
                         }).await
@@ -41,7 +41,7 @@ impl StorageManager {
                         .map_err(RuntimeError::from)?;
 
                     self.event_tx
-                        .send(crate::runtime::node::RuntimeEvent::StorageLoaded {
+                        .send(crate::runtime::manager::RuntimeEvent::StorageLoaded {
                             block_hash,
                             state_bytes,
                         }).await
