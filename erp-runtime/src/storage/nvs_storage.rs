@@ -149,7 +149,9 @@ impl NvsStorage {
     ) -> Result<Option<(Block, Vec<u8>)>, ContractError> {
         let block_hash = match self.read_hash_key(LATEST_SNAPSHOT_KEY) {
             Ok(Some(block_hash)) => block_hash,
-            Ok(None) => return Ok(None),
+            Ok(None) => {
+                return Ok(None);
+            }
             Err(_) => {
                 warn!(
                     target: TAG,
