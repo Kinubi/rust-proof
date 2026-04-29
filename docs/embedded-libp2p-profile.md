@@ -31,6 +31,7 @@ What gets reduced is transport feature breadth, not node authority.
 If this is not your area, read in this order:
 
 1. Section 3 for the short version.
+2. `docs/embedded-libp2p-implementation-guide.md` if you are actually writing the ERP transport code.
 2. Section 4 for the concrete protocol subset.
 3. Section 5 for the architectural decisions that matter most.
 4. Section 8 and Section 9 for the file-by-file changes.
@@ -43,6 +44,7 @@ If you are implementing this later, the most important sections are:
 - Section 9: `erp-runtime` module layout
 - Section 10: protocol flow
 - Section 12: step-by-step delivery order
+- `docs/embedded-libp2p-implementation-guide.md`: coding-order workbook with exact file targets, protocol ids, dependency choices, and compile checkpoints
 
 ### 2.1 Naming Rule For This Document
 
@@ -63,9 +65,37 @@ Concrete examples:
 - `IdentityManager` is an existing type in `erp-runtime`
 - `TransportIdentityManager` is a proposed new local type for transport keys
 - `std::net::SocketAddr` is the first implementation choice for ESP-IDF socket endpoints
-- `BootstrapAddress` in this document is a proposed reduced address type for config, not a full libp2p multiaddr implementation
+- `MultiaddrLite` in this document is the proposed reduced address type for config, not a full libp2p multiaddr implementation
+
+If the code already uses a different local name for the same concept, prefer aligning the document to the code that actually exists.
+
+For example, if `erp-runtime/src/network/config.rs` already defines `MultiaddrLite`, keep using that name until there is a concrete reason to rename it everywhere.
 
 The goal of this section is to avoid undefined placeholder names that sound more concrete than they really are.
+
+### 2.2 Rule For Examples And Hidden Dependencies
+
+This document should be implementable without making the reader guess at hidden crates, hidden wire formats, or hidden state-machine rules.
+
+Whenever a section says "implement X", it must answer all of these:
+
+- is `X` a project-local helper or a third-party dependency?
+- if `X` is third-party, what is the first recommended crate?
+- what wire format does `X` actually speak?
+- if the API is `async` over `std::net`, who hides `WouldBlock`, `Interrupted`, or `NotConnected`?
+- if the current scaffold already uses a different local name, which name wins?
+
+For this document, the standing answers are:
+
+- custom rust-proof application protocols (`NodeHello`, `Sync`, `Announce`) use postcard
+- standard libp2p compatibility layers do not use postcard:
+    - multistream-select has its own protocol framing
+    - Identify uses the libp2p Identify protobuf schema
+    - Noise uses libp2p-compatible Noise XX handshake bytes
+    - Yamux uses Yamux framing
+- the first ESP socket backend uses `std::net::{TcpListener, TcpStream}` for listener and stream wrappers
+- nonblocking outbound connect on ESP-IDF uses a socket created once and polled until completion; a retry loop around `TcpStream::connect` is explicitly wrong
+- if this document recommends a crate in one section, that crate should also appear again in Section 13
 
 ## 3. Short Version
 
@@ -261,6 +291,12 @@ Reasons:
 - deterministic enough for this runtime boundary
 - good fit for ESP memory limits
 
+Important scope rule:
+
+- use postcard only for rust-proof application protocols and local helper transcripts
+- do not use postcard for multistream-select, Identify, Noise, or Yamux
+- if a protocol is a standard libp2p control layer, keep its native wire format and only translate into local structs after parsing
+
 ### 5.5 Use ESP-IDF Networking First, Keep The Protocol Engine Portable
 
 Because `erp-runtime` is already set up around ESP-IDF, `esp-idf-hal`, and `esp-idf-svc`, the first shipping implementation should use ESP-IDF sockets.
@@ -282,6 +318,39 @@ Concrete rule for the first delivery:
 
 - `socket/esp_idf.rs` is the only backend that should be implemented
 - `socket/embassy_net.rs` may exist as an empty placeholder file, but it should not consume implementation time before the ESP-IDF path is working end-to-end
+
+### 5.5.1 What The ESP-IDF Socket Backend Means In Code
+
+For v1, "ESP-IDF sockets" means this exact ownership split:
+
+- Wi-Fi bring-up and `esp_netif` readiness are owned by `NetworkManager` and boot code
+- the socket backend owns only TCP listener and stream objects
+- `esp_netif` is not the socket type and should not be stored inside each accepted connection object
+
+Concrete v1 backend choices:
+
+- listener wrapper: `std::net::TcpListener`
+- accepted stream wrapper: `std::net::TcpStream`
+- outbound nonblocking connect helper: `socket2::Socket`
+- async waiting between retries: `embassy_time::Timer`
+
+Why `socket2` appears here:
+
+- `TcpStream::connect(addr)` is a blocking call
+- calling `TcpStream::connect(addr)` again in a retry loop does not "wait for the same connection"
+- each call creates a brand-new socket and restarts the dial attempt
+
+That means the first correct async-shaped outbound dial implementation must:
+
+1. create one socket
+2. set it nonblocking before `connect`
+3. call `connect` once
+4. treat `WouldBlock` or `Interrupted` as "dial in progress"
+5. poll that same socket until it is connected or reports a real failure
+
+The protocol layers above `SocketFactory` should never need to see `WouldBlock`, `Interrupted`, or `NotConnected`.
+
+Those are backend-internal states.
 
 ### 5.6 Keep Peer Counts And Buffers Hard-Bounded
 
@@ -658,11 +727,11 @@ pub struct NetworkConfig {
 }
 
 pub struct BootstrapPeer {
-    pub address: BootstrapAddress,
+    pub address: MultiaddrLite,
     pub expected_transport_peer: Option<Vec<u8>>,
 }
 
-pub enum BootstrapAddress {
+pub enum MultiaddrLite {
     Ip4Tcp {
         addr: [u8; 4],
         port: u16,
@@ -674,13 +743,13 @@ pub enum BootstrapAddress {
 }
 ```
 
-`BootstrapAddress` is intentionally not a full libp2p multiaddr.
+`MultiaddrLite` is intentionally not a full libp2p multiaddr.
 
 It is only a configuration type for the address forms we expect to dial in v1.
 
 Recommended use:
 
-- keep `BootstrapAddress` in config and persistence code
+- keep `MultiaddrLite` in config and persistence code
 - resolve it into `std::net::SocketAddr` right before dialing
 - add more address forms only when the runtime actually needs them
 
@@ -688,6 +757,18 @@ Concrete v1 rule:
 
 - implement `Ip4Tcp` first
 - if `Dns4Tcp` is present before DNS dialing exists, fail fast with a clear runtime error instead of silently ignoring it
+
+Recommended helper to make that rule concrete:
+
+```rust
+pub fn resolve_bootstrap_addr(addr: &MultiaddrLite) -> Result<std::net::SocketAddr, RuntimeError>;
+```
+
+Expected behavior:
+
+- `Ip4Tcp` maps directly into `SocketAddr::from(([a, b, c, d], port))`
+- `Dns4Tcp` returns a clear `RuntimeError::Config("Dns4Tcp not implemented yet")` until DNS support is actually added
+- do not silently skip an unsupported bootstrap address, because that makes bootstrap failures impossible to debug
 
 ### 9.2 `socket/traits.rs`
 
@@ -730,6 +811,100 @@ Implementation plan:
 - `embassy_net.rs` remains an empty placeholder until the ESP-IDF backend is working end-to-end
 
 This keeps the higher protocol code portable even if the transport substrate changes later.
+
+Concrete v1 backend shape:
+
+```rust
+pub struct EspSocketFactory {
+    pub addr: std::net::SocketAddr,
+}
+
+pub struct EspTcpListener {
+    listener: std::net::TcpListener,
+}
+
+pub struct EspTcpStream {
+    stream: std::net::TcpStream,
+}
+
+impl EspTcpStream {
+    pub fn stream(&self) -> &std::net::TcpStream;
+    pub fn stream_mut(&mut self) -> &mut std::net::TcpStream;
+    pub fn into_inner(self) -> std::net::TcpStream;
+}
+```
+
+Required dependency for the first real outbound dial implementation:
+
+- `socket2`
+
+Why this is required in practice:
+
+- `accept` can be implemented correctly with a nonblocking `TcpListener`
+- `connect` cannot be implemented correctly by looping on `TcpStream::connect`
+- a correct nonblocking dial needs one socket that survives across poll iterations
+
+Concrete method behavior for `socket/esp_idf.rs`:
+
+- `bind(port)`:
+  - call `TcpListener::bind(SocketAddr::new(self.addr.ip(), port))`
+  - immediately call `set_nonblocking(true)`
+- `accept(listener)`:
+  - loop on `listener.accept()`
+  - on success call `set_nonblocking(true)` on the accepted stream and return `(EspTcpStream, peer_addr)`
+  - on `ErrorKind::WouldBlock`, yield with `Timer::after(Duration::from_millis(SOCKET_RETRY_DELAY_MS)).await`
+- `connect(addr)`:
+  - create one `socket2::Socket`
+  - set it nonblocking before `connect`
+  - call `connect` once
+  - if the initial result is `WouldBlock` or `Interrupted`, keep polling that same socket
+  - use `take_error()` plus `peer_addr()` on the same socket to detect completion or failure
+  - only convert into `TcpStream` after success
+
+Concrete skeleton for `connect`:
+
+```rust
+use socket2::{ Domain, Protocol, SockAddr, Socket, Type };
+
+const SOCKET_RETRY_DELAY_MS: u64 = 150;
+
+async fn connect(&self, addr: SocketAddr) -> Result<EspTcpStream, RuntimeError> {
+    let socket = Socket::new(
+        match addr {
+            SocketAddr::V4(_) => Domain::IPV4,
+            SocketAddr::V6(_) => Domain::IPV6,
+        },
+        Type::STREAM,
+        Some(Protocol::TCP),
+    )?;
+
+    socket.set_nonblocking(true)?;
+
+    match socket.connect(&SockAddr::from(addr)) {
+        Ok(()) => return Ok(EspTcpStream { stream: socket.into() }),
+        Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+        Err(error) => return Err(RuntimeError::NetworkError(error)),
+    }
+
+    loop {
+        if let Some(error) = socket.take_error()? {
+            return Err(RuntimeError::NetworkError(error));
+        }
+
+        match socket.peer_addr() {
+            Ok(_) => return Ok(EspTcpStream { stream: socket.into() }),
+            Err(error) if error.kind() == ErrorKind::NotConnected => {
+                Timer::after(Duration::from_millis(SOCKET_RETRY_DELAY_MS)).await;
+            }
+            Err(error) => return Err(RuntimeError::NetworkError(error)),
+        }
+    }
+}
+```
+
+If the first milestone accepts a blocking dial temporarily, say that explicitly in both code comments and the document.
+
+Do not make it look async if it is still blocking.
 
 ### 9.3 `peer_registry.rs`
 
@@ -827,13 +1002,29 @@ impl<S> SessionWorker<S> {
 }
 ```
 
+Concrete `run()` order for v1:
+
+1. obtain a raw TCP stream from the socket backend
+2. negotiate multistream for the secure transport upgrade
+3. run the Noise handshake and extract the authenticated remote transport peer id
+4. negotiate the multiplexer upgrade
+5. start Yamux in inbound or outbound mode depending on `ConnectionRole`
+6. open one control substream and run Identify
+7. open one control substream and run NodeHello
+8. only after NodeHello verification succeeds, register the peer in `PeerRegistry`
+9. enter the ready loop for Sync and Announce traffic
+
+Do not skip from "TCP connected" directly to "peer connected".
+
+The session worker is responsible for every intermediate transport state.
+
 Recommended `IdentifyInfo` shape:
 
 ```rust
 pub struct IdentifyInfo {
     pub protocol_version: String,
     pub agent_version: String,
-    pub listen_addrs: Vec<BootstrapAddress>,
+    pub listen_addrs: Vec<MultiaddrLite>,
     pub supported_protocols: Vec<String>,
     pub observed_addr: Option<std::net::SocketAddr>,
     pub transport_peer_id: Vec<u8>,
@@ -856,6 +1047,32 @@ This module should do one thing:
 
 - read and write multistream protocol selections safely under explicit size caps
 
+Concrete wire-format rule:
+
+- multistream-select is not postcard
+- protocol names are exchanged as unsigned-varint length-prefixed UTF-8 strings ending in `\n`
+- the first negotiation step on a fresh stream is the multistream header `/multistream/1.0.0\n`
+
+Recommended first dependency:
+
+- `unsigned-varint`
+
+Recommended local helpers:
+
+```rust
+pub async fn write_multistream_proto<S>(stream: &mut S, protocol: &str) -> Result<(), RuntimeError>;
+pub async fn read_multistream_proto<S>(stream: &mut S, max_len: usize) -> Result<String, RuntimeError>;
+pub async fn select_one_of<S>(stream: &mut S, protocols: &[&str]) -> Result<String, RuntimeError>;
+```
+
+Required protocol selection order for the first outbound session:
+
+1. multistream header
+2. Noise protocol
+3. multistream header again on the secured stream if the chosen implementation expects a fresh negotiation boundary
+4. Yamux protocol
+5. after Yamux is running, one protocol selection per substream for Identify, NodeHello, Sync, or Announce
+
 ### 9.6 `transport/noise.rs`
 
 Purpose:
@@ -874,6 +1091,18 @@ Concrete v1 requirement:
 - do not invent a custom peer-id derivation or a custom handshake transcript here
 - the output of this stage must be an authenticated remote transport peer id plus a secure byte stream for Yamux
 
+This is one of the easiest places to lose compatibility by guessing.
+
+Concrete guidance:
+
+- first dependency choice: `snow`
+- source of truth: a host-side interop test against `rp-runtime`, not generic Noise tutorials
+- deliverable from this module: a secure stream plus the authenticated remote transport public key and derived transport peer id
+
+If the implementation cannot explain how the remote transport peer id is derived from the remote authenticated transport key, then the implementation is not done yet.
+
+Do not proceed to Yamux until that mapping is proven in a host interop test.
+
 ### 9.7 `transport/yamux.rs`
 
 Purpose:
@@ -885,6 +1114,14 @@ Responsibilities:
 - open a control substream for Identify and NodeHello
 - open request-response substreams for Sync and Announce
 - enforce substream limits
+
+Concrete v1 rule:
+
+- do not hand-roll a Yamux frame parser unless the crate option has already been proven impossible on target
+- first dependency choice: `yamux`
+- the first implementation may open a fresh substream per protocol exchange instead of inventing a long-lived custom control channel abstraction
+
+The important part is standard Yamux interoperability, not clever stream lifecycle design.
 
 ### 9.8 `protocol/identify.rs`
 
@@ -908,6 +1145,27 @@ Concrete v1 rule:
 - treat `listen_addrs`, `agent_version`, and `observed_addr` as informational only
 - do not update bootstrap config or routing state from Identify in v1
 
+Concrete wire-format rule:
+
+- Identify is a standard protobuf message, not postcard
+- do not invent a local Identify wire format just because the custom protocols use postcard
+
+Recommended first dependency:
+
+- `quick-protobuf` on ERP because it is lighter-weight
+- `prost` is acceptable if the project later prefers one protobuf toolchain everywhere
+
+Required fields to parse or emit in v1:
+
+- public key
+- protocol version
+- agent version
+- listen addresses
+- observed address
+- supported protocols
+
+Unknown protobuf fields should be ignored, not treated as a decode failure.
+
 ### 9.9 `protocol/node_hello.rs`
 
 Purpose:
@@ -920,6 +1178,17 @@ This module should contain:
 - `NodeHelloResponse`
 - transcript construction for signature verification
 - capability compatibility checks
+
+Concrete transcript rule:
+
+- build a dedicated local transcript struct
+- postcard-encode that transcript struct
+- sign the transcript bytes with the node identity key
+- verify the same transcript bytes on receipt
+
+Do not sign the already-serialized `NodeHello` frame directly.
+
+That tends to make future field additions or framing changes harder to reason about.
 
 ### 9.10 `protocol/sync.rs`
 
@@ -971,6 +1240,10 @@ pub struct NetworkManager<F: SocketFactory> {
 }
 ```
 
+If the current code already has a concrete `NetworkManager` that owns Wi-Fi directly, it is fine to keep that concrete type in v1 and store `EspSocketFactory` as a concrete field.
+
+The important seam is the `SocketFactory` boundary itself, not whether `NetworkManager` is generic on day one.
+
 Recommended responsibilities:
 
 - start the listener loop
@@ -1002,6 +1275,11 @@ This section is the handholding version of the runtime sequence.
 9. `PeerRegistry` stores `transport_session -> node_peer_id`.
 10. `NetworkManager` emits `RuntimeEvent::PeerConnected { peer: node_peer_id }`.
 11. The session is now allowed to carry Sync and Announce traffic.
+
+Important implementation meaning of step 2:
+
+- `SocketFactory::connect` should return only when the stream is actually usable or when the backend has a real error
+- `WouldBlock`, `Interrupted`, and `NotConnected` are backend-internal states, not states the caller should handle
 
 ### 10.2 Inbound Accept Flow
 
@@ -1082,6 +1360,28 @@ pub struct TransportIdentityManager {
 }
 ```
 
+Concrete storage rule for v1:
+
+- store one fixed-size Ed25519 private seed or secret key in NVS
+- derive the public key and transport peer id at boot
+- do not store an opaque host-side libp2p keypair blob if a simpler fixed-size record will do
+
+Recommended first dependency:
+
+- `ed25519-dalek` or another small Ed25519 implementation already accepted by the workspace
+
+Recommended first record shape:
+
+```rust
+pub struct TransportIdentityRecord {
+    pub secret_key: [u8; 32],
+}
+```
+
+That record is intentionally boring.
+
+The goal is persistence and reproducibility, not clever serialization.
+
 Recommended first methods:
 
 ```rust
@@ -1137,6 +1437,21 @@ pub struct VerifiedPeer {
 }
 ```
 
+Recommended transcript shape:
+
+```rust
+pub struct NodeHelloTranscript<'a> {
+    pub version: u16,
+    pub node_peer_id: [u8; 32],
+    pub transport_peer_id: &'a [u8],
+    pub max_frame_len: u32,
+    pub max_blocks_per_chunk: u16,
+    pub capabilities: &'a PeerCapabilities,
+}
+```
+
+Build this transcript first, postcard-encode it, then sign those bytes.
+
 ### 11.4 Add A Binary Codec Layer
 
 Recommended helper type:
@@ -1162,6 +1477,22 @@ Meaning of these two helpers:
 The purpose is not abstraction for its own sake.
 
 The purpose is to avoid scattering `postcard::to_allocvec` and `postcard::from_bytes` across every protocol handler.
+
+Concrete scope rule:
+
+- this codec layer is for `NodeHello`, `Sync`, `Announce`, and local transcript structs
+- it is not for multistream-select, Identify protobuf, Noise handshake payloads, or Yamux frames
+
+Recommended framing helper next to postcard helpers:
+
+```rust
+pub fn encode_length_prefixed(payload: &[u8], max_len: u32) -> Result<Vec<u8>, RuntimeError>;
+pub fn decode_length_prefixed(frame: &[u8], max_len: u32) -> Result<&[u8], RuntimeError>;
+```
+
+Recommended first dependency for the length prefix helper:
+
+- `unsigned-varint`
 
 ### 11.5 Add A Small Transport Upgrade Boundary
 
@@ -1236,24 +1567,28 @@ Tasks:
 1. Introduce `NetworkConfig`, `PeerRegistry`, and `SessionWorker`.
 2. Replace the current stub-only `NetworkManager` with an orchestrator.
 3. Add socket abstraction and implement the ESP-IDF socket backend.
+4. Use `std::net::{TcpListener, TcpStream}` for the listener and stream wrappers.
+5. Use `socket2` for the outbound nonblocking dial path instead of retrying `TcpStream::connect`.
 
 Exit criteria:
 
 - TCP listener and outbound dialer exist
+- outbound dial uses one socket per connection attempt, not redial-in-a-loop behavior
 - session slots are tracked and bounded
 
 ### M5. Implement The Transport Stack
 
 Tasks:
 
-1. Implement multistream negotiation.
-2. Implement Noise.
-3. Implement Yamux.
-4. Add Identify support sufficient for the host profile.
+1. Implement multistream negotiation with `unsigned-varint` framing helpers.
+2. Implement Noise with a named dependency such as `snow` and prove host interop before proceeding.
+3. Implement Yamux with a crate-based multiplexer instead of a custom frame parser.
+4. Add Identify support with a real protobuf implementation such as `quick-protobuf`.
 
 Exit criteria:
 
 - ERP can establish a secure multiplexed session with a host node in embedded-compatible mode
+- the transport stack no longer depends on undocumented or hand-invented wire formats
 
 ### M6. Implement NodeHello And Peer Registration
 
@@ -1312,11 +1647,25 @@ Likely keep:
 
 Likely add:
 
+- `socket2` for one-socket nonblocking outbound connect on ESP-IDF
 - a bounded registry helper such as `slab`
 - a multistream framing helper such as `unsigned-varint`
-- a Noise implementation that does not drag in `ring`
-- a Yamux implementation
+- a Noise implementation such as `snow` that does not drag in `ring`
+- a Yamux implementation such as `yamux`
+- a protobuf implementation for Identify, with `quick-protobuf` as the first ERP recommendation
+- an Ed25519 implementation such as `ed25519-dalek` for transport identity storage and signing if no existing workspace dependency already covers it
 - `serde` derives for protocol structs if not already available through shared crates
+
+Dependency-to-purpose table for ERP v1:
+
+| Dependency | Where it shows up | Why it is needed |
+| --- | --- | --- |
+| `socket2` | `socket/esp_idf.rs` | nonblocking outbound connect on one socket instead of redialing in a loop |
+| `unsigned-varint` | `transport/multistream.rs`, `codec/length_prefixed.rs` | multistream framing and bounded length prefixes |
+| `snow` | `transport/noise.rs` | Noise XX handshake engine without `ring` |
+| `yamux` | `transport/yamux.rs` | standard stream multiplexing |
+| `quick-protobuf` | `protocol/identify.rs` | Identify protobuf parsing and encoding |
+| `ed25519-dalek` | transport identity manager | persistent transport key handling |
 
 If `embassy-net` is desired later, add it behind a feature and implement only the `SocketFactory` backend switch.
 
@@ -1361,6 +1710,9 @@ Recommended first real smoke criteria:
 6. Do not emit `PeerConnected` before NodeHello verification succeeds.
 7. Do not let `NetworkManager` become a thousand-line god object.
 8. Do not try to run a full desktop transport feature set on the ESP first.
+9. Do not assume postcard applies to standard libp2p control protocols.
+10. Do not implement async dial by looping on `TcpStream::connect`.
+11. Do not leave a section at "add a helper type" if the helper also needs a named crate, wire format, or retry rule.
 
 ## 16. Definition Of Done For The First Embedded-Compatible Delivery
 

@@ -1,6 +1,7 @@
 use std::{ io::ErrorKind, net::{ SocketAddr, TcpListener, TcpStream } };
 
 use embassy_time::{ Duration, Timer };
+use futures::io::AllowStdIo;
 use socket2::{ Domain, Protocol, SockAddr, Socket, Type };
 
 use crate::{ network::socket::traits::SocketFactory, runtime::errors::RuntimeError };
@@ -30,6 +31,15 @@ impl EspTcpStream {
 
     pub fn into_inner(self) -> TcpStream {
         self.stream
+    }
+
+    pub fn into_blocking(self) -> Result<TcpStream, RuntimeError> {
+        self.stream.set_nonblocking(false).map_err(RuntimeError::NetworkError)?;
+        Ok(self.stream)
+    }
+
+    pub fn into_futures_io(self) -> Result<AllowStdIo<TcpStream>, RuntimeError> {
+        Ok(AllowStdIo::new(self.into_blocking()?))
     }
 }
 
