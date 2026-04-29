@@ -1,3 +1,4 @@
+use esp_idf_svc::wifi::{ AsyncWifi, EspWifi };
 use futures::{ SinkExt, StreamExt };
 use log::{ error, info };
 use rp_core::traits::ToBytes;
@@ -16,15 +17,40 @@ pub struct NetworkManager {
     network_rx: NetworkRx,
     event_tx: EventTx,
     identity: IdentityManager,
+    wifi: AsyncWifi<EspWifi<'static>>,
 }
 
 impl NetworkManager {
-    pub fn new(network_rx: NetworkRx, event_tx: EventTx, identity: IdentityManager) -> Self {
-        Self { network_rx, event_tx, identity }
+    pub fn new(
+        network_rx: NetworkRx,
+        event_tx: EventTx,
+        identity: IdentityManager,
+        wifi: AsyncWifi<EspWifi<'static>>
+    ) -> Self {
+        Self { network_rx, event_tx, identity, wifi }
+    }
+
+    async fn ensure_wifi_connected(&mut self) -> Result<(), RuntimeError> {
+        if !self.wifi.is_started().map_err(RuntimeError::esp)? {
+            self.wifi.start().await.map_err(RuntimeError::esp)?;
+            info!(target: TAG, "wifi started");
+        }
+
+        if !self.wifi.is_connected().map_err(RuntimeError::esp)? {
+            self.wifi.connect().await.map_err(RuntimeError::esp)?;
+            info!(target: TAG, "wifi connected");
+        }
+
+        self.wifi.wait_netif_up().await.map_err(RuntimeError::esp)?;
+        info!(target: TAG, "wifi netif up");
+
+        Ok(())
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
         info!(target: TAG, "Running Network");
+
+        self.ensure_wifi_connected().await?;
 
         match build_probe_block(&self.identity) {
             Ok(probe_block) => {

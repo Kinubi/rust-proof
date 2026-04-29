@@ -15,6 +15,8 @@ pub enum RuntimeError {
     Node(NodeError),
     Contract(ContractError),
     Crypto(&'static str),
+    Config(&'static str),
+    Esp(EspError),
     StorageInit(EspError),
     ChannelSend {
         channel: ChannelKind,
@@ -25,6 +27,14 @@ pub enum RuntimeError {
 impl RuntimeError {
     pub fn crypto(message: &'static str) -> Self {
         Self::Crypto(message)
+    }
+
+    pub fn config(message: &'static str) -> Self {
+        Self::Config(message)
+    }
+
+    pub fn esp(source: EspError) -> Self {
+        Self::Esp(source)
     }
 
     pub fn event_send(source: SendError) -> Self {
@@ -65,5 +75,11 @@ impl From<NodeError> for RuntimeError {
 impl From<ContractError> for RuntimeError {
     fn from(value: ContractError) -> Self {
         Self::Contract(value)
+    }
+}
+
+impl From<EspError> for RuntimeError {
+    fn from(value: EspError) -> Self {
+        Self::Esp(value)
     }
 }

@@ -1,6 +1,12 @@
 use embassy_time::{ Duration, Timer };
+use embedded_svc::wifi::{ AuthMethod, ClientConfiguration, Configuration };
 use edge_executor::{ block_on as edge_block_on, LocalExecutor };
 use esp_idf_hal::task::block_on as esp_block_on;
+use esp_idf_svc::eventloop::EspSystemEventLoop;
+use esp_idf_svc::hal::peripherals::Peripherals;
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::timer::EspTaskTimerService;
+use esp_idf_svc::wifi::{ AsyncWifi, EspWifi };
 use futures::channel::mpsc;
 
 use log::error;
@@ -31,6 +37,11 @@ const NODE_RUNTIME_STACK_SIZE: usize = 64 * 1024;
 const IO_RUNTIME_STACK_SIZE: usize = 48 * 1024;
 const NETWORK_STARTUP_DELAY_MS: u64 = 500;
 
+const WIFI_SSID_MISSING: &str = "missing WIFI_SSID environment variable";
+const WIFI_PASS_MISSING: &str = "missing WIFI_PASS environment variable";
+const WIFI_SSID_INVALID: &str = "WIFI_SSID exceeds ESP-IDF client configuration limits";
+const WIFI_PASS_INVALID: &str = "WIFI_PASS exceeds ESP-IDF client configuration limits";
+
 pub fn run() -> Result<(), RuntimeError> {
     let blockchain = Blockchain::new().map_err(RuntimeError::from)?;
     let node_engine = NodeEngine::new(blockchain);
@@ -40,9 +51,10 @@ pub fn run() -> Result<(), RuntimeError> {
     let (storage_tx, storage_rx) = mpsc::channel::<StorageCommand>(STORAGE_CHANNEL_CAPACITY);
     let (wake_tx, wake_rx) = mpsc::channel::<WakeCommand>(WAKE_CHANNEL_CAPACITY);
     let identity_manager = IdentityManager::select()?;
+    let wifi = create_wifi()?;
 
     let node_runtime = NodeManager::new(node_engine, event_rx, network_tx, storage_tx, wake_tx);
-    let network_manager = NetworkManager::new(network_rx, event_tx.clone(), identity_manager);
+    let network_manager = NetworkManager::new(network_rx, event_tx.clone(), identity_manager, wifi);
     let nvs_storage = NvsStorage::new().map_err(RuntimeError::StorageInit)?;
     let storage_manager = StorageManager::new(nvs_storage, event_tx.clone(), storage_rx);
     let wake_manager = WakeManager::new(event_tx.clone(), wake_rx);
@@ -54,6 +66,33 @@ pub fn run() -> Result<(), RuntimeError> {
     io_handle.join().expect("io-runtime thread panicked")?;
 
     Ok(())
+}
+
+fn create_wifi() -> Result<AsyncWifi<EspWifi<'static>>, RuntimeError> {
+    let ssid = option_env!("WIFI_SSID").ok_or(RuntimeError::config(WIFI_SSID_MISSING))?;
+    let password = option_env!("WIFI_PASS").ok_or(RuntimeError::config(WIFI_PASS_MISSING))?;
+
+    let peripherals = Peripherals::take().map_err(RuntimeError::esp)?;
+    let sys_loop = EspSystemEventLoop::take().map_err(RuntimeError::esp)?;
+    let timer_service = EspTaskTimerService::new().map_err(RuntimeError::esp)?;
+    let nvs = EspDefaultNvsPartition::take().map_err(RuntimeError::esp)?;
+
+    let mut wifi = AsyncWifi::wrap(
+        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs)).map_err(RuntimeError::esp)?,
+        sys_loop,
+        timer_service
+    ).map_err(RuntimeError::esp)?;
+
+    let configuration = Configuration::Client(ClientConfiguration {
+        ssid: ssid.try_into().map_err(|_| RuntimeError::config(WIFI_SSID_INVALID))?,
+        password: password.try_into().map_err(|_| RuntimeError::config(WIFI_PASS_INVALID))?,
+        auth_method: AuthMethod::WPA2Personal,
+        ..Default::default()
+    });
+
+    wifi.set_configuration(&configuration).map_err(RuntimeError::esp)?;
+
+    Ok(wifi)
 }
 
 fn spawn_node_runtime(node_runtime: NodeManager) -> thread::JoinHandle<Result<(), RuntimeError>> {

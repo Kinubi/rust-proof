@@ -44,6 +44,29 @@ If you are implementing this later, the most important sections are:
 - Section 10: protocol flow
 - Section 12: step-by-step delivery order
 
+### 2.1 Naming Rule For This Document
+
+This document uses three kinds of type names:
+
+1. existing types already present in the repository
+2. proposed new project-local types that do not exist yet
+3. standard library or third-party types used only as examples
+
+When a type in this document is only a proposed local helper, the intent is:
+
+- it is a suggested name, not a magic external dependency
+- it should be created inside this repository if we decide to keep that design
+- if a simpler existing type already does the job, prefer the simpler existing type
+
+Concrete examples:
+
+- `IdentityManager` is an existing type in `erp-runtime`
+- `TransportIdentityManager` is a proposed new local type for transport keys
+- `std::net::SocketAddr` is the first implementation choice for ESP-IDF socket endpoints
+- `BootstrapAddress` in this document is a proposed reduced address type for config, not a full libp2p multiaddr implementation
+
+The goal of this section is to avoid undefined placeholder names that sound more concrete than they really are.
+
 ## 3. Short Version
 
 The minimal embedded profile should be:
@@ -125,6 +148,29 @@ Do not make these part of the ERP-required profile initially:
 
 mDNS may be added later as a convenience feature, but it should not block the first interoperable implementation.
 
+### 4.4 Locked v1 Decisions
+
+These choices should be treated as fixed for the first end-to-end implementation.
+
+Do not reopen them unless one proves impossible on hardware.
+
+| Topic | Locked v1 decision | Why |
+| --- | --- | --- |
+| Node identity | keep the existing node identity path in `erp-runtime/src/identity/manager.rs` | avoids redesigning validator or node identity while transport is still being built |
+| Transport identity | use a separate Ed25519 transport identity persisted in NVS | matches host-side libp2p identity expectations and keeps transport keys separate from node keys |
+| Transport peer id | use canonical libp2p `PeerId` bytes derived from the Ed25519 transport public key | keeps ERP transport identity compatible with host-side libp2p semantics |
+| Noise handshake | implement libp2p-compatible Noise XX semantics, not a custom Noise variant | interoperability depends on matching the host stack here |
+| Socket backend | implement only the ESP-IDF socket backend in the first delivery | avoids splitting time between two network backends before one works |
+| Address support | support `Ip4Tcp` first; keep `Dns4Tcp` in the config type if useful, but allow it to return a clear "not implemented yet" error initially | removes DNS from the critical path |
+| Peer registry storage | use `Vec<Option<PeerSession>>` with `SessionId` as the slot index | simpler than adding another container abstraction early |
+| Ping | do not advertise or implement Ping until NodeHello, Sync, and Announce work end-to-end | keeps the first milestone focused on required functionality |
+| Identify consumption | only use Identify for supported protocol checks and transport identity metadata; do not build dialing or peerstore logic from it in v1 | prevents a large side quest into host-like peer management |
+
+The main consequence is that the first shipping ERP transport owns two distinct keys:
+
+- node identity key: existing project node identity
+- transport identity key: Ed25519 key used for libp2p-compatible transport identity
+
 ## 5. Architecture Decisions
 
 This section is the core of the design.
@@ -149,9 +195,9 @@ Recommended meaning of each:
   - today this already exists in `erp-runtime/src/identity/manager.rs`
   - used for node-level signatures and peer naming inside `rp-node`
 - Transport identity:
-  - persistent transport keypair used by the transport stack
-  - used for Noise and transport-level peer identity
-  - may be a software-managed key stored in NVS
+    - persistent Ed25519 keypair used by the transport stack
+    - used for transport-level peer identity and for authenticating the Noise handshake in a libp2p-compatible way
+    - stored in NVS for ERP in the first implementation
   - should not be coupled to consensus or validator identity
 
 This separation is important because desktop libp2p identity constraints and ESP validator identity constraints are not the same problem.
@@ -231,6 +277,11 @@ Important clarification:
 - do not layer `embassy-net` on top of ESP-IDF lwIP in the first slice
 
 Instead, design the transport code behind a small socket abstraction so that a future `embassy-net`-based implementation can be added later if the project moves away from ESP-IDF.
+
+Concrete rule for the first delivery:
+
+- `socket/esp_idf.rs` is the only backend that should be implemented
+- `socket/embassy_net.rs` may exist as an empty placeholder file, but it should not consume implementation time before the ESP-IDF path is working end-to-end
 
 ### 5.6 Keep Peer Counts And Buffers Hard-Bounded
 
@@ -325,6 +376,12 @@ Verification rules on receipt:
 
 The runtime should only mark the peer as ready after this passes.
 
+Important distinction:
+
+- `NodeHello.signature` is signed by the node identity key, not the transport identity key
+- the transport identity key is already authenticated by the Noise handshake
+- `NodeHello` exists to bind those two identities together after transport authentication succeeds
+
 ### 6.3 `Sync` Protocol
 
 This should be a binary request-response protocol.
@@ -342,12 +399,20 @@ pub struct SyncRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncChunk {
+pub struct SyncResponse {
     pub blocks: Vec<Block>,
     pub has_more: bool,
     pub next_height: Option<u64>,
 }
 ```
+
+This keeps the existing `SyncResponse` name while making it chunk-friendly for ERP.
+
+Field meaning:
+
+- `blocks`: the bounded block batch being returned now
+- `has_more`: `true` if the remote still has more blocks in the requested range or beyond the current chunk limit
+- `next_height`: the first height the requester should ask for next if it wants to continue
 
 This is more ERP-safe than returning an arbitrary range in one response.
 
@@ -364,16 +429,23 @@ Recommended shape:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum AnnounceRequest {
+pub struct AnnounceRequest {
+    pub kind: AnnounceKind,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AnnounceKind {
     NewTransaction(Transaction),
     NewBlock(Block),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnnounceAck {
+pub struct AnnounceResponse {
     pub accepted: bool,
 }
 ```
+
+This matches the current direction in `rp-node`: `NetworkMessage` stays an enum over message structs, and announce-specific detail lives inside `AnnounceRequest.kind`.
 
 Broadcast on ERP then simply means:
 
@@ -448,20 +520,25 @@ Recommended updates in or around `rp-node/src/network/message.rs`:
 
 ```rust
 #[derive(Serialize, Deserialize, Debug)]
-pub struct SyncChunk {
+pub struct SyncResponse {
     pub blocks: Vec<Block>,
     pub has_more: bool,
     pub next_height: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub enum AnnounceRequest {
+pub struct AnnounceRequest {
+    pub kind: AnnounceKind,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum AnnounceKind {
     NewTransaction(Transaction),
     NewBlock(Block),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct AnnounceAck {
+pub struct AnnounceResponse {
     pub accepted: bool,
 }
 ```
@@ -499,9 +576,9 @@ Recommended behavior split:
 pub struct EmbeddedCompatibleBehaviour {
     pub identify: identify::Behaviour,
     pub ping: ping::Behaviour,
-    pub node_hello: request_response::Behaviour<PostcardCodec<NodeHello, NodeHelloResponse>>,
-    pub sync: request_response::Behaviour<PostcardCodec<SyncRequest, SyncChunk>>,
-    pub announce: request_response::Behaviour<PostcardCodec<AnnounceRequest, AnnounceAck>>,
+    pub node_hello: request_response::Behaviour<ReqResPostcardCodec<NodeHello, NodeHelloResponse>>,
+    pub sync: request_response::Behaviour<ReqResPostcardCodec<SyncRequest, SyncResponse>>,
+    pub announce: request_response::Behaviour<ReqResPostcardCodec<AnnounceRequest, AnnounceResponse>>,
 }
 ```
 
@@ -541,7 +618,6 @@ erp-runtime/src/network/
     mod.rs
     traits.rs
     esp_idf.rs
-    embassy_net.rs
   transport/
     mod.rs
     multistream.rs
@@ -582,12 +658,36 @@ pub struct NetworkConfig {
 }
 
 pub struct BootstrapPeer {
-    pub address: MultiaddrLite,
+    pub address: BootstrapAddress,
     pub expected_transport_peer: Option<Vec<u8>>,
+}
+
+pub enum BootstrapAddress {
+    Ip4Tcp {
+        addr: [u8; 4],
+        port: u16,
+    },
+    Dns4Tcp {
+        host: String,
+        port: u16,
+    },
 }
 ```
 
-`MultiaddrLite` should only support the address forms you actually plan to use in v1.
+`BootstrapAddress` is intentionally not a full libp2p multiaddr.
+
+It is only a configuration type for the address forms we expect to dial in v1.
+
+Recommended use:
+
+- keep `BootstrapAddress` in config and persistence code
+- resolve it into `std::net::SocketAddr` right before dialing
+- add more address forms only when the runtime actually needs them
+
+Concrete v1 rule:
+
+- implement `Ip4Tcp` first
+- if `Dns4Tcp` is present before DNS dialing exists, fail fast with a clear runtime error instead of silently ignoring it
 
 ### 9.2 `socket/traits.rs`
 
@@ -606,18 +706,28 @@ pub trait SocketFactory {
     async fn accept(
         &self,
         listener: &mut Self::TcpListener,
-    ) -> Result<(Self::TcpStream, SocketAddr), RuntimeError>;
+    ) -> Result<(Self::TcpStream, std::net::SocketAddr), RuntimeError>;
     async fn connect(
         &self,
-        addr: SocketAddr,
+        addr: std::net::SocketAddr,
     ) -> Result<Self::TcpStream, RuntimeError>;
 }
 ```
 
+Use `std::net::SocketAddr` here for the first ESP-IDF implementation.
+
+Why this is acceptable:
+
+- `erp-runtime` currently targets ESP-IDF with `std` available
+- the socket layer already depends on ESP-IDF networking rather than a pure `no_std` stack
+- using a standard endpoint type removes one extra local abstraction from the first implementation
+
+If the runtime later moves away from ESP-IDF and `std`, this can be replaced by a project-local endpoint type.
+
 Implementation plan:
 
 - `esp_idf.rs` is the first real implementation
-- `embassy_net.rs` is optional or future-facing
+- `embassy_net.rs` remains an empty placeholder until the ESP-IDF backend is working end-to-end
 
 This keeps the higher protocol code portable even if the transport substrate changes later.
 
@@ -652,11 +762,18 @@ pub enum SessionState {
 }
 
 pub struct PeerRegistry {
-    sessions: slab::Slab<PeerSession>,
+    sessions: Vec<Option<PeerSession>>,
     by_node_peer: BTreeMap<[u8; 32], SessionId>,
     max_peers: usize,
 }
 ```
+
+Notes on the storage containers:
+
+- `BTreeMap` here means `alloc::collections::BTreeMap`
+- `sessions[index] = Some(peer_session)` means the slot is occupied
+- `sessions[index] = None` means the slot is free
+- `SessionId` is just the index into `sessions`
 
 Responsibilities:
 
@@ -678,7 +795,7 @@ pub struct SessionWorker<S> {
     pub session_id: SessionId,
     pub stream: S,
     pub role: ConnectionRole,
-    pub node_identity: NodeIdentityManager,
+    pub node_identity: IdentityManager,
     pub transport_identity: TransportIdentityManager,
     pub config: NetworkConfig,
 }
@@ -688,6 +805,12 @@ pub enum ConnectionRole {
     Outbound,
 }
 ```
+
+Type meaning here:
+
+- `IdentityManager` is the existing node-identity type in `erp-runtime`
+- `TransportIdentityManager` is a proposed new local type that loads, stores, and signs with the transport keypair used by Noise and transport peer identification
+- `SessionWorker<S>` is not a framework type; it is just the proposed local connection-state worker
 
 Recommended method breakdown:
 
@@ -703,6 +826,23 @@ impl<S> SessionWorker<S> {
     async fn run_ready_loop(&mut self, verified: VerifiedPeer) -> Result<(), RuntimeError>;
 }
 ```
+
+Recommended `IdentifyInfo` shape:
+
+```rust
+pub struct IdentifyInfo {
+    pub protocol_version: String,
+    pub agent_version: String,
+    pub listen_addrs: Vec<BootstrapAddress>,
+    pub supported_protocols: Vec<String>,
+    pub observed_addr: Option<std::net::SocketAddr>,
+    pub transport_peer_id: Vec<u8>,
+}
+```
+
+This does not need to mirror every field from desktop libp2p internals.
+
+It only needs the fields the runtime actually consumes during compatibility checks.
 
 This is the right place to keep protocol sequencing, rather than bloating `NetworkManager`.
 
@@ -728,6 +868,12 @@ Recommended dependency direction:
 
 This is important because previous experiments already showed that `ring` is a bad fit for the ESP build target.
 
+Concrete v1 requirement:
+
+- this module must implement libp2p-compatible Noise XX behavior for the chosen transport identity, not just any Noise-secured stream
+- do not invent a custom peer-id derivation or a custom handshake transcript here
+- the output of this stage must be an authenticated remote transport peer id plus a secure byte stream for Yamux
+
 ### 9.7 `transport/yamux.rs`
 
 Purpose:
@@ -746,7 +892,7 @@ Purpose:
 
 - wrap the minimum Identify exchange needed for protocol discovery and peer metadata
 
-If the standard libp2p Identify payload is awkward to implement manually in full, keep the first implementation narrow but consistent with what the host expects.
+For v1, keep the Identify implementation narrow and consistent with what the host expects.
 
 The important thing is not fancy peerstore behavior.
 
@@ -755,6 +901,12 @@ The important thing is:
 - protocol compatibility check
 - visibility of supported protocols
 - transport identity confirmation
+
+Concrete v1 rule:
+
+- only parse or emit the Identify fields the ERP runtime actually checks
+- treat `listen_addrs`, `agent_version`, and `observed_addr` as informational only
+- do not update bootstrap config or routing state from Identify in v1
 
 ### 9.9 `protocol/node_hello.rs`
 
@@ -793,6 +945,12 @@ Responsibilities:
 - bound the number of in-flight announces
 - surface failures as logs or disconnects, not panics
 
+Concrete v1 rule:
+
+- announce delivery should be request-response with `AnnounceResponse { accepted: bool }`
+- ERP should not implement pubsub semantics in this module
+- ERP should treat `accepted = false` as a logged peer-level failure, not as a node-engine state transition
+
 ### 9.12 `manager.rs`
 
 Purpose:
@@ -805,7 +963,7 @@ Recommended shape:
 pub struct NetworkManager<F: SocketFactory> {
     network_rx: NetworkRx,
     event_tx: EventTx,
-    node_identity: NodeIdentityManager,
+    node_identity: IdentityManager,
     transport_identity: TransportIdentityManager,
     sockets: F,
     config: NetworkConfig,
@@ -872,7 +1030,7 @@ This section is the handholding version of the runtime sequence.
 1. `rp-node` emits `RequestBlocks { peer, from_height, to_height }`.
 2. `NetworkManager` clamps the request to `max_blocks_per_chunk`.
 3. The peer receives a `SyncRequest`.
-4. The remote responds with `SyncChunk`.
+4. The remote responds with `SyncResponse`.
 5. The runtime converts each block into the existing node-level flow.
 6. If `has_more` is true, the runtime issues the next request only when ready.
 
@@ -914,6 +1072,30 @@ Notes:
 - this trait belongs in the runtime crate, not in `rp-node`
 - it is fine for host and ERP runtimes to implement this differently
 - transport identity should be persistent across restarts
+
+Recommended first concrete shape:
+
+```rust
+pub struct TransportIdentityManager {
+    // Owns the persistent Ed25519 transport keypair used by Noise and transport peer id.
+    // Back this with NVS in erp-runtime.
+}
+```
+
+Recommended first methods:
+
+```rust
+impl TransportIdentityManager {
+    pub fn load_or_create(/* storage deps */) -> Result<Self, RuntimeError>;
+    pub fn peer_id_bytes(&self) -> &[u8];
+    pub fn public_key_bytes(&self) -> &[u8];
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, RuntimeError>;
+}
+```
+
+For v1, this manager should own the transport identity only.
+
+Do not merge it with the existing node `IdentityManager`.
 
 ### 11.3 Add A NodeHello Builder And Verifier
 
@@ -960,15 +1142,22 @@ pub struct VerifiedPeer {
 Recommended helper type:
 
 ```rust
-pub trait WireCodec {
-    type Item;
-
-    fn encode(item: &Self::Item) -> Result<Vec<u8>, RuntimeError>;
-    fn decode(bytes: &[u8]) -> Result<Self::Item, RuntimeError>;
+pub trait ValueCodec<T> {
+    fn encode(item: &T) -> Result<Vec<u8>, RuntimeError>;
+    fn decode(bytes: &[u8]) -> Result<T, RuntimeError>;
 }
 
 pub struct PostcardCodec<T>(core::marker::PhantomData<T>);
+
+pub struct ReqResPostcardCodec<Req, Resp>(
+    core::marker::PhantomData<(Req, Resp)>
+);
 ```
+
+Meaning of these two helpers:
+
+- `PostcardCodec<T>` is the simple local helper for one postcard-encoded type
+- `ReqResPostcardCodec<Req, Resp>` is the host-side adapter shape for `libp2p::request_response`, where one protocol has one request type and one response type
 
 The purpose is not abstraction for its own sake.
 
@@ -981,10 +1170,23 @@ Recommended helper type:
 ```rust
 pub struct TransportUpgrader;
 
+pub struct MuxedSession<M> {
+    pub muxer: M,
+    pub remote_transport_peer_id: Vec<u8>,
+}
+
 impl TransportUpgrader {
-    pub async fn secure_and_mux<S>(stream: S) -> Result<MuxedSession<S>, RuntimeError>;
+    pub async fn secure_and_mux<S, M>(stream: S) -> Result<MuxedSession<M>, RuntimeError>;
 }
 ```
+
+`MuxedSession<M>` is just the project-local result of a successful transport upgrade.
+
+It should own:
+
+- the authenticated secure channel state
+- the Yamux multiplexer instance
+- the authenticated remote transport peer id
 
 This keeps the protocol sequencing testable outside `NetworkManager`.
 
@@ -1070,8 +1272,8 @@ Exit criteria:
 
 Tasks:
 
-1. Add bounded `SyncChunk` flow.
-2. Add `AnnounceRequest` and `AnnounceAck` flow.
+1. Add bounded `SyncResponse` flow.
+2. Add `AnnounceRequest` and `AnnounceResponse` flow.
 3. Wire these through the existing `NetworkCommand` and `RuntimeEvent` machinery.
 
 Exit criteria:
