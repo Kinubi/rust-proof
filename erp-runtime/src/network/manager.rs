@@ -1,7 +1,7 @@
 use futures::{ SinkExt, StreamExt };
 use log::{ error, info };
 use rp_core::traits::ToBytes;
-use rp_node::{ contract::Identity, network::message::NetworkMessage };
+use rp_node::{ contract::Identity, network::message::{ AnnounceRequest, NetworkMessage } };
 
 use crate::{
     identity::manager::IdentityManager,
@@ -38,7 +38,9 @@ impl NetworkManager {
                 self.event_tx
                     .send(RuntimeEvent::FrameReceived {
                         peer: self.identity.peer_id(),
-                        frame: NetworkMessage::NewBlock(probe_block).to_bytes(),
+                        frame: NetworkMessage::AnnounceRequest(
+                            AnnounceRequest::block(probe_block)
+                        ).to_bytes(),
                     }).await
                     .map_err(RuntimeError::event_send)?;
             }

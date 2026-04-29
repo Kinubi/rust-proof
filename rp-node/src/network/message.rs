@@ -5,10 +5,10 @@ use alloc::vec::Vec;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum NetworkMessage {
-    NewTransaction(Transaction),
-    NewBlock(Block),
+    AnnounceRequest(AnnounceRequest),
     SyncRequest(SyncRequest),
     SyncResponse(SyncResponse),
+    AnnounceResponse(AnnounceResponse),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -20,6 +20,38 @@ pub struct SyncRequest {
 #[derive(Serialize, Deserialize, Debug)]
 pub struct SyncResponse {
     pub blocks: Vec<Block>,
+    pub has_more: bool,
+    pub next_height: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AnnounceRequest {
+    pub kind: AnnounceKind,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum AnnounceKind {
+    NewTransaction(Transaction),
+    NewBlock(Block),
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct AnnounceResponse {
+    pub accepted: bool,
+}
+
+impl AnnounceRequest {
+    pub fn transaction(transaction: Transaction) -> Self {
+        Self {
+            kind: AnnounceKind::NewTransaction(transaction),
+        }
+    }
+
+    pub fn block(block: Block) -> Self {
+        Self {
+            kind: AnnounceKind::NewBlock(block),
+        }
+    }
 }
 
 impl ToBytes for NetworkMessage {
@@ -40,6 +72,18 @@ impl ToBytes for SyncResponse {
     }
 }
 
+impl ToBytes for AnnounceRequest {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("announce request serialization should succeed")
+    }
+}
+
+impl ToBytes for AnnounceResponse {
+    fn to_bytes(&self) -> Vec<u8> {
+        postcard::to_allocvec(self).expect("announce response serialization should succeed")
+    }
+}
+
 impl FromBytes for NetworkMessage {
     fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
         postcard::from_bytes(bytes).map_err(|_| "invalid network message")
@@ -55,6 +99,18 @@ impl FromBytes for SyncRequest {
 impl FromBytes for SyncResponse {
     fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
         postcard::from_bytes(bytes).map_err(|_| "invalid sync response")
+    }
+}
+
+impl FromBytes for AnnounceRequest {
+    fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        postcard::from_bytes(bytes).map_err(|_| "invalid announce request")
+    }
+}
+
+impl FromBytes for AnnounceResponse {
+    fn from_bytes(bytes: &[u8]) -> Result<Self, &'static str> {
+        postcard::from_bytes(bytes).map_err(|_| "invalid announce response")
     }
 }
 
@@ -99,16 +155,22 @@ mod tests {
         let hash = transaction.hash();
         transaction.signature = Some(sender.sign(&hash));
 
-        let encoded = NetworkMessage::NewTransaction(transaction.clone()).to_bytes();
+        let encoded = NetworkMessage::AnnounceRequest(
+            AnnounceRequest::transaction(transaction.clone())
+        ).to_bytes();
         let decoded = NetworkMessage::from_bytes(&encoded).unwrap();
 
         match decoded {
-            NetworkMessage::NewTransaction(decoded_tx) => {
-                assert_eq!(decoded_tx.sender, transaction.sender);
-                assert_eq!(decoded_tx.sequence, transaction.sequence);
-                assert_eq!(decoded_tx.fee, transaction.fee);
-                assert_eq!(decoded_tx.signature, transaction.signature);
-            }
+            NetworkMessage::AnnounceRequest(request) =>
+                match request.kind {
+                    AnnounceKind::NewTransaction(decoded_tx) => {
+                        assert_eq!(decoded_tx.sender, transaction.sender);
+                        assert_eq!(decoded_tx.sequence, transaction.sequence);
+                        assert_eq!(decoded_tx.fee, transaction.fee);
+                        assert_eq!(decoded_tx.signature, transaction.signature);
+                    }
+                    _ => panic!("expected transaction announce"),
+                }
             _ => panic!("expected transaction message"),
         }
     }

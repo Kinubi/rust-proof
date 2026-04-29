@@ -87,7 +87,9 @@ mod tests {
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
         let actions = engine.step(NodeInput::FrameReceived {
             peer: [0u8; 32],
-            frame: rp_node::network::message::NetworkMessage::NewBlock(block).to_bytes(),
+            frame: rp_node::network::message::NetworkMessage
+                ::AnnounceRequest(rp_node::network::message::AnnounceRequest::block(block))
+                .to_bytes(),
         });
 
         assert_eq!(actions.len(), 2);

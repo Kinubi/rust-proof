@@ -7,7 +7,7 @@ use rp_core::state::State;
 use rp_core::traits::{ FromBytes, Hashable, ToBytes };
 
 use crate::contract::BlockHash;
-use crate::network::message::{ NetworkMessage, SyncResponse };
+use crate::network::message::{ AnnounceKind, AnnounceRequest, NetworkMessage, SyncResponse };
 use crate::{ blockchain::Blockchain, contract::{ NodeAction, NodeInput, PeerId } };
 
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
@@ -88,7 +88,9 @@ impl NodeEngine {
     }
 
     fn relay_transaction(&self, source_peer: PeerId, transaction: &Transaction) -> Vec<NodeAction> {
-        let frame = NetworkMessage::NewTransaction(transaction.clone()).to_bytes();
+        let frame = NetworkMessage::AnnounceRequest(
+            AnnounceRequest::transaction(transaction.clone())
+        ).to_bytes();
 
         self.peers
             .iter()
@@ -245,22 +247,36 @@ impl NodeEngine {
                 };
 
                 match message {
-                    NetworkMessage::NewBlock(block) => self.ingest_block(peer, block),
-                    NetworkMessage::NewTransaction(tx) => {
-                        match self.blockchain.add_transaction(tx.clone()) {
-                            Ok(true) => self.relay_transaction(peer, &tx),
-                            Ok(false) => Vec::new(),
-                            Err(error) => vec![NodeAction::ReportEvent { message: error }],
+                    NetworkMessage::AnnounceRequest(request) =>
+                        match request.kind {
+                            AnnounceKind::NewBlock(block) => self.ingest_block(peer, block),
+                            AnnounceKind::NewTransaction(tx) => {
+                                match self.blockchain.add_transaction(tx.clone()) {
+                                    Ok(true) => self.relay_transaction(peer, &tx),
+                                    Ok(false) => Vec::new(),
+                                    Err(error) => vec![NodeAction::ReportEvent { message: error }],
+                                }
+                            }
                         }
-                    }
                     NetworkMessage::SyncRequest(request) => {
                         let blocks = self.blockchain.get_blocks(
                             request.from_height,
                             request.to_height
                         );
+
+                        let has_more =
+                            request.to_height < self.blockchain.get_latest_block().height;
                         vec![NodeAction::SendFrame {
                             peer,
-                            frame: NetworkMessage::SyncResponse(SyncResponse { blocks }).to_bytes(),
+                            frame: NetworkMessage::SyncResponse(SyncResponse {
+                                blocks,
+                                has_more,
+                                next_height: if has_more {
+                                    Some(request.to_height.saturating_add(1))
+                                } else {
+                                    None
+                                },
+                            }).to_bytes(),
                         }]
                     }
                     NetworkMessage::SyncResponse(response) => {
@@ -278,6 +294,7 @@ impl NodeEngine {
                             actions
                         }
                     }
+                    NetworkMessage::AnnounceResponse(_) => vec![NodeAction::FrameReceived { peer }],
                 }
             }
 
@@ -285,7 +302,9 @@ impl NodeEngine {
                 match self.blockchain.add_transaction(transaction.clone()) {
                     Ok(true) =>
                         vec![NodeAction::BroadcastFrame {
-                            frame: NetworkMessage::NewTransaction(transaction).to_bytes(),
+                            frame: NetworkMessage::AnnounceRequest(
+                                AnnounceRequest::transaction(transaction)
+                            ).to_bytes(),
                         }],
                     Ok(false) => Vec::new(),
                     Err(_) =>
@@ -424,14 +443,16 @@ mod tests {
         let block_a = build_empty_block(&genesis, &engine.blockchain.state, &validator_a, 1);
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(block_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(block_a.clone())
+            ).to_bytes(),
         });
         assert_persist_actions(&actions, block_a.hash());
 
         let block_b = build_empty_block(&genesis, &engine.blockchain.state, &validator_b, 2);
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(block_b).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(AnnounceRequest::block(block_b)).to_bytes(),
         });
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -463,7 +484,9 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(block.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(block.clone())
+            ).to_bytes(),
         });
 
         assert_eq!(engine.blockchain.head_hash, block.hash());
@@ -485,7 +508,9 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_of_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_of_a.clone())
+            ).to_bytes(),
         });
 
         assert_eq!(actions.len(), 1);
@@ -512,7 +537,9 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_of_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_of_a.clone())
+            ).to_bytes(),
         });
         assert!(matches!(&actions[0], NodeAction::LoadSnapshot { .. }));
 
@@ -540,7 +567,7 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_of_a).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(AnnounceRequest::block(child_of_a)).to_bytes(),
         });
         assert!(matches!(&actions[0], NodeAction::LoadSnapshot { .. }));
 
@@ -576,18 +603,27 @@ mod tests {
         let genesis = engine.blockchain.get_latest_block().clone();
         let block = build_empty_block(&genesis, &engine.blockchain.state, &validator, 1);
 
+        let to_height = 1;
+
         let request_actions = engine.step(NodeInput::ImportRequested {
             peer,
             from_height: 1,
-            to_height: 1,
+            to_height,
         });
         assert_eq!(engine.pending_requests.len(), 1);
         assert!(matches!(&request_actions[0], NodeAction::RequestBlocks { .. }));
+        let has_more = 1 < engine.blockchain.get_latest_block().height;
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
             frame: NetworkMessage::SyncResponse(SyncResponse {
                 blocks: vec![block.clone()],
+                has_more,
+                next_height: if has_more {
+                    Some(to_height.saturating_add(1))
+                } else {
+                    None
+                },
             }).to_bytes(),
         });
 
@@ -615,7 +651,9 @@ mod tests {
         engine.step(NodeInput::PeerConnected { peer: peer_b });
 
         let transaction = build_transfer_transaction(&sender, &receiver, 25, 1, 0);
-        let expected_frame = NetworkMessage::NewTransaction(transaction.clone()).to_bytes();
+        let expected_frame = NetworkMessage::AnnounceRequest(
+            AnnounceRequest::transaction(transaction.clone())
+        ).to_bytes();
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer: source_peer,
@@ -656,7 +694,9 @@ mod tests {
         engine.step(NodeInput::PeerConnected { peer: other_peer });
 
         let transaction = build_transfer_transaction(&sender, &receiver, 25, 1, 0);
-        let frame = NetworkMessage::NewTransaction(transaction).to_bytes();
+        let frame = NetworkMessage::AnnounceRequest(
+            AnnounceRequest::transaction(transaction)
+        ).to_bytes();
 
         let first_actions = engine.step(NodeInput::FrameReceived {
             peer: source_peer,
@@ -739,11 +779,15 @@ mod tests {
 
         engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_a.clone())
+            ).to_bytes(),
         });
         engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_b.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_b.clone())
+            ).to_bytes(),
         });
 
         assert_eq!(engine.pending_blocks.get(&block_a.hash()).unwrap().len(), 2);
