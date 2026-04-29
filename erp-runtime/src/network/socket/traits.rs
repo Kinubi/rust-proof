@@ -1,3 +1,5 @@
+use crate::runtime::errors::RuntimeError;
+
 pub trait SocketFactory {
     type TcpStream;
     type TcpListener;

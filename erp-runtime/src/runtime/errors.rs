@@ -1,3 +1,5 @@
+use std::io::Error;
+
 use futures::channel::mpsc::SendError;
 use rp_node::errors::{ ContractError, NodeError };
 use esp_idf_hal::sys::EspError;
@@ -22,6 +24,7 @@ pub enum RuntimeError {
         channel: ChannelKind,
         source: SendError,
     },
+    NetworkError(Error),
 }
 
 impl RuntimeError {
