@@ -817,6 +817,7 @@ dependencies = [
  "rand 0.10.1",
  "rp-core",
  "rp-node",
+ "serde",
  "sha2 0.11.0",
  "socket2",
 ]

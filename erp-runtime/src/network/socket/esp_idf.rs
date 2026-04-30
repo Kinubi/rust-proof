@@ -1,4 +1,7 @@
-use std::{ io::ErrorKind, net::{ SocketAddr, TcpListener, TcpStream } };
+use std::{
+    io::ErrorKind,
+    net::{ Shutdown, SocketAddr, TcpListener, TcpStream },
+};
 
 use embassy_time::{ Duration, Timer };
 use futures::io::AllowStdIo;
@@ -40,6 +43,24 @@ impl EspTcpStream {
 
     pub fn into_futures_io(self) -> Result<AllowStdIo<TcpStream>, RuntimeError> {
         Ok(AllowStdIo::new(self.into_blocking()?))
+    }
+
+    pub async fn read_exact_nonblocking(&mut self, buf: &mut [u8]) -> Result<(), RuntimeError> {
+        let _ = buf;
+        todo!("implement nonblocking exact reads")
+    }
+
+    pub async fn write_all_nonblocking(&mut self, buf: &[u8]) -> Result<(), RuntimeError> {
+        let _ = buf;
+        todo!("implement nonblocking writes")
+    }
+
+    pub async fn flush_nonblocking(&mut self) -> Result<(), RuntimeError> {
+        todo!("implement nonblocking flush")
+    }
+
+    pub fn shutdown(&mut self) -> Result<(), RuntimeError> {
+        self.stream.shutdown(Shutdown::Both).map_err(RuntimeError::NetworkError)
     }
 }
 

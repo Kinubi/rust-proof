@@ -187,8 +187,8 @@ Do not reopen them unless one proves impossible on hardware.
 | Topic | Locked v1 decision | Why |
 | --- | --- | --- |
 | Node identity | keep the existing node identity path in `erp-runtime/src/identity/manager.rs` | avoids redesigning validator or node identity while transport is still being built |
-| Transport identity | use a separate Ed25519 transport identity persisted in NVS | matches host-side libp2p identity expectations and keeps transport keys separate from node keys |
-| Transport peer id | use canonical libp2p `PeerId` bytes derived from the Ed25519 transport public key | keeps ERP transport identity compatible with host-side libp2p semantics |
+| Transport identity | use a separate libp2p-compatible transport identity persisted in NVS; Ed25519 is the default, ECDSA P-256 is also valid | keeps transport keys separate from node keys without blocking libp2p compatibility |
+| Transport peer id | use canonical libp2p `PeerId` bytes derived from the chosen transport public key | keeps ERP transport identity compatible with host-side libp2p semantics |
 | Noise handshake | implement libp2p-compatible Noise XX semantics, not a custom Noise variant | interoperability depends on matching the host stack here |
 | Socket backend | implement only the ESP-IDF socket backend in the first delivery | avoids splitting time between two network backends before one works |
 | Address support | support `Ip4Tcp` first; keep `Dns4Tcp` in the config type if useful, but allow it to return a clear "not implemented yet" error initially | removes DNS from the critical path |
@@ -199,7 +199,7 @@ Do not reopen them unless one proves impossible on hardware.
 The main consequence is that the first shipping ERP transport owns two distinct keys:
 
 - node identity key: existing project node identity
-- transport identity key: Ed25519 key used for libp2p-compatible transport identity
+- transport identity key: a libp2p-compatible identity key used for transport peer identity; Ed25519 is the default, ECDSA P-256 is also valid
 
 ## 5. Architecture Decisions
 
@@ -225,10 +225,16 @@ Recommended meaning of each:
   - today this already exists in `erp-runtime/src/identity/manager.rs`
   - used for node-level signatures and peer naming inside `rp-node`
 - Transport identity:
-    - persistent Ed25519 keypair used by the transport stack
+        - persistent libp2p-compatible identity keypair used by the transport stack
     - used for transport-level peer identity and for authenticating the Noise handshake in a libp2p-compatible way
     - stored in NVS for ERP in the first implementation
   - should not be coupled to consensus or validator identity
+
+For clarity:
+
+- this identity key can be Ed25519 or ECDSA P-256
+- if you choose ECDSA P-256, derive the libp2p `PeerId` from the protobuf-encoded `ECDSA` public key
+- this does not change the Noise DH algorithm; libp2p Noise still uses X25519 for the static handshake key
 
 This separation is important because desktop libp2p identity constraints and ESP validator identity constraints are not the same problem.
 
@@ -1354,26 +1360,33 @@ Notes:
 Recommended first concrete shape:
 
 ```rust
+pub enum TransportIdentityAlgorithm {
+    Ed25519,
+    EcdsaP256,
+}
+
 pub struct TransportIdentityManager {
-    // Owns the persistent Ed25519 transport keypair used by Noise and transport peer id.
+    // Owns the persistent libp2p-compatible transport identity keypair.
+    // Keep the algorithm explicit so Ed25519 and ECDSA P-256 both fit cleanly.
     // Back this with NVS in erp-runtime.
 }
 ```
 
 Concrete storage rule for v1:
 
-- store one fixed-size Ed25519 private seed or secret key in NVS
+- store one algorithm-tagged fixed-size secret key or scalar in NVS
 - derive the public key and transport peer id at boot
 - do not store an opaque host-side libp2p keypair blob if a simpler fixed-size record will do
 
 Recommended first dependency:
 
-- `ed25519-dalek` or another small Ed25519 implementation already accepted by the workspace
+- `ed25519-dalek` if you keep Ed25519, or `p256` if you switch to ECDSA P-256
 
 Recommended first record shape:
 
 ```rust
 pub struct TransportIdentityRecord {
+    pub algorithm: TransportIdentityAlgorithm,
     pub secret_key: [u8; 32],
 }
 ```
@@ -1653,7 +1666,7 @@ Likely add:
 - a Noise implementation such as `snow` that does not drag in `ring`
 - a Yamux implementation such as `yamux`
 - a protobuf implementation for Identify, with `quick-protobuf` as the first ERP recommendation
-- an Ed25519 implementation such as `ed25519-dalek` for transport identity storage and signing if no existing workspace dependency already covers it
+- `p256` if the transport identity uses ECDSA P-256, or `ed25519-dalek` if it uses Ed25519
 - `serde` derives for protocol structs if not already available through shared crates
 
 Dependency-to-purpose table for ERP v1:
@@ -1665,7 +1678,8 @@ Dependency-to-purpose table for ERP v1:
 | `snow` | `transport/noise.rs` | Noise XX handshake engine without `ring` |
 | `yamux` | `transport/yamux.rs` | standard stream multiplexing |
 | `quick-protobuf` | `protocol/identify.rs` | Identify protobuf parsing and encoding |
-| `ed25519-dalek` | transport identity manager | persistent transport key handling |
+| `p256` | transport identity manager | choose this if the libp2p identity key is ECDSA P-256 |
+| `ed25519-dalek` | transport identity manager | choose this if the libp2p identity key remains Ed25519 |
 
 If `embassy-net` is desired later, add it behind a feature and implement only the `SocketFactory` backend switch.
 

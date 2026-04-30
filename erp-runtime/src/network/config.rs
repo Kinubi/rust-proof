@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub struct NetworkConfig {
     pub listen_port: u16,
     pub max_peers: usize,
@@ -8,6 +9,7 @@ pub struct NetworkConfig {
     pub bootstrap_peers: Vec<BootstrapPeer>,
 }
 
+#[derive(Debug, Clone)]
 pub enum MultiaddrLite {
     Ip4Tcp {
         addr: [u8; 4],
@@ -19,6 +21,7 @@ pub enum MultiaddrLite {
     },
 }
 
+#[derive(Debug, Clone)]
 pub struct BootstrapPeer {
     pub address: MultiaddrLite,
     pub expected_transport_peer: Option<Vec<u8>>,

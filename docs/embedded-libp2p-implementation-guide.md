@@ -84,11 +84,34 @@ Add these when you reach the matching step:
 - `quick-protobuf`: Identify and Noise handshake payload protobufs
 - `snow`: Noise XX handshake engine without `ring`
 - `yamux`: standard multiplexer implementation
-- `ed25519-dalek`: transport identity key storage and signing unless an existing accepted dependency already covers it
+- `p256`: if you want the libp2p identity key to be ECDSA P-256
+- `ed25519-dalek`: if you keep Ed25519 for the libp2p identity key
 
 Optional later:
 
 - `slab`: if you decide `Vec<Option<_>>` becomes too awkward
+
+### 5.1 Transport Identity Algorithm Choice
+
+Yes, you can use ECDSA P-256 instead of Ed25519 for the libp2p-compatible identity key.
+
+The important constraints are:
+
+- this choice affects the libp2p identity key and peer id derivation
+- this does not change the Noise DH algorithm
+- libp2p Noise still uses `Noise_XX_25519_ChaChaPoly_SHA256`, so the Noise static key is still X25519
+
+If you choose P-256:
+
+- use `p256`
+- encode the public key in the libp2p `ECDSA` public-key protobuf form
+- expect the resulting libp2p `PeerId` to be derived from the protobuf-encoded public key, not from your rust-proof node id
+- expect signatures to be DER-encoded ECDSA signatures rather than fixed 64-byte Ed25519 signatures
+
+If you choose Ed25519:
+
+- `ed25519-dalek` remains the simplest small dependency
+- peer ids will typically look like the familiar inline-key Ed25519 libp2p peer ids
 
 ## 6. One Critical Execution-Model Decision
 
@@ -310,31 +333,39 @@ Then export it from `erp-runtime/src/network/mod.rs`.
 Put these items in the new file:
 
 ```rust
+pub enum TransportIdentityAlgorithm {
+    Ed25519,
+    EcdsaP256,
+}
+
 pub trait TransportIdentity {
+    fn algorithm(&self) -> TransportIdentityAlgorithm;
     fn transport_peer_id(&self) -> Vec<u8>;
-    fn public_key_bytes(&self) -> Vec<u8>;
+    fn public_key_protobuf_bytes(&self) -> Vec<u8>;
     fn sign(&self, message: &[u8]) -> Result<Vec<u8>, RuntimeError>;
 }
 
 pub struct TransportIdentityRecord {
+    pub algorithm: TransportIdentityAlgorithm,
     pub secret_key: [u8; 32],
 }
 
 pub struct TransportIdentityManager {
-    // NVS-backed Ed25519 transport keypair
+    // NVS-backed libp2p-compatible transport identity keypair.
+    // This can be Ed25519 or ECDSA P-256.
 }
 
 impl TransportIdentityManager {
     pub fn load_or_create(/* nvs deps */) -> Result<Self, RuntimeError>;
     pub fn peer_id_bytes(&self) -> &[u8];
-    pub fn public_key_bytes(&self) -> &[u8];
+    pub fn public_key_protobuf_bytes(&self) -> &[u8];
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, RuntimeError>;
 }
 ```
 
 Storage rule:
 
-- store one fixed-size Ed25519 secret key or seed in NVS
+- store one algorithm-tagged 32-byte secret key or scalar in NVS
 - derive public key and transport peer id at boot
 
 ### Step 7. Fill `protocol/node_hello.rs`
@@ -484,6 +515,10 @@ Use these exact libp2p Noise facts:
 - multistream protocol id: `/noise`
 - Noise protocol name: `Noise_XX_25519_ChaChaPoly_SHA256`
 - only XX is guaranteed for interop
+- the libp2p identity key may be Ed25519 or ECDSA P-256
+- the Noise static DH key is still X25519 regardless of which identity algorithm you choose
+- `identity_key` in the Noise payload is the libp2p public-key protobuf bytes for the chosen identity algorithm
+- `identity_sig` is produced by that identity key; if you choose P-256 it is a DER-encoded ECDSA signature
 
 Noise handshake payload schema to parse or emit:
 

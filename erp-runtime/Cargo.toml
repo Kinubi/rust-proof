@@ -25,6 +25,7 @@ futures = "0.3.32"
 edge-executor = "0.4.1"
 embedded-svc = "0.29.0"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
 rp-core = { path = "../rp-core" }
 rp-node = { path = "../rp-node" }
 rand = "0.10.1"
