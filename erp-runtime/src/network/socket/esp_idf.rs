@@ -1,7 +1,4 @@
-use std::{
-    io::ErrorKind,
-    net::{ Shutdown, SocketAddr, TcpListener, TcpStream },
-};
+use std::{ io::ErrorKind, net::{ Shutdown, SocketAddr, TcpListener, TcpStream } };
 
 use embassy_time::{ Duration, Timer };
 use futures::io::AllowStdIo;
