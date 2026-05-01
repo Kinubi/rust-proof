@@ -2,6 +2,7 @@ use embedded_svc::storage::RawStorage;
 use esp_idf_svc::nvs::{ EspKeyValueStorage, EspNvs, EspNvsPartition, NvsDefault };
 use libp2p_identity::{ KeyType, Keypair, PublicKey, ecdsa };
 use log::info;
+use rp_core::crypto::Signature as P256Signature;
 use rp_node::contract::Identity as _;
 use serde::{ Deserialize, Serialize };
 
@@ -93,7 +94,16 @@ impl TransportIdentityManager {
                         RuntimeError::crypto(
                             "failed to sign message with hardware transport identity"
                         )
-                    ),
+                    )
+                    .and_then(|raw_signature| {
+                        P256Signature::from_slice(&raw_signature)
+                            .map(|signature| signature.to_der().as_bytes().to_vec())
+                            .map_err(|_|
+                                RuntimeError::crypto(
+                                    "hardware transport signature was not a valid P-256 signature"
+                                )
+                            )
+                    }),
         }
     }
 

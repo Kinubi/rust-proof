@@ -35,6 +35,7 @@ socket2 = "0.5"
 unsigned-varint = "0.8"
 quick-protobuf = "0.8.1"
 multiaddr = "0.18.2"
+snow = { version = "0.9.6", default-features = false, features = ["default-resolver"] }
 
 
 [build-dependencies]
