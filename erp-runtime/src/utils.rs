@@ -1,5 +1,5 @@
 #![allow(unused)]
-use log::{ info, warn };
+use log::{info, warn};
 
 const TAG: &str = "utils";
 #[repr(C)]
@@ -18,11 +18,7 @@ fn get_slave_firmware_version() -> Result<CoprocessorFirmwareVersion, i32> {
     let mut version = CoprocessorFirmwareVersion::default();
     let err = unsafe { esp_hosted_get_coprocessor_fwversion(&mut version) };
 
-    if err == 0 {
-        Ok(version)
-    } else {
-        Err(err)
-    }
+    if err == 0 { Ok(version) } else { Err(err) }
 }
 
 fn print_slave_firmware_version(version: CoprocessorFirmwareVersion) {

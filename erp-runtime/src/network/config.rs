@@ -11,14 +11,8 @@ pub struct NetworkConfig {
 
 #[derive(Debug, Clone)]
 pub enum MultiaddrLite {
-    Ip4Tcp {
-        addr: [u8; 4],
-        port: u16,
-    },
-    Dns4Tcp {
-        host: String,
-        port: u16,
-    },
+    Ip4Tcp { addr: [u8; 4], port: u16 },
+    Dns4Tcp { host: String, port: u16 },
 }
 
 #[derive(Debug, Clone)]

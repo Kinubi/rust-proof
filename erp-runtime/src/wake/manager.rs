@@ -1,10 +1,13 @@
-use embassy_time::{ Duration, Instant, Timer };
-use futures::{ FutureExt, SinkExt, StreamExt, pin_mut };
-use rp_node::{ contract::{ Clock, Wake, WakeAt }, errors::ContractError };
+use embassy_time::{Duration, Instant, Timer};
+use futures::{FutureExt, SinkExt, StreamExt, pin_mut};
+use rp_node::{
+    contract::{Clock, Wake, WakeAt},
+    errors::ContractError,
+};
 
 use crate::runtime::{
     errors::RuntimeError,
-    manager::{ EventTx, RuntimeEvent, WakeCommand, WakeRx },
+    manager::{EventTx, RuntimeEvent, WakeCommand, WakeRx},
 };
 
 const STARTUP_HEARTBEAT_DELAY_MS: u64 = 1_000;
@@ -68,10 +71,12 @@ impl WakeManager {
     }
 
     async fn emit_tick(&mut self) -> Result<(), RuntimeError> {
-        if
-            let Err(error) = self.event_tx.send(RuntimeEvent::Tick {
+        if let Err(error) = self
+            .event_tx
+            .send(RuntimeEvent::Tick {
                 now_ms: self.now_ms(),
-            }).await
+            })
+            .await
         {
             return Err(RuntimeError::event_send(error));
         }
@@ -114,7 +119,9 @@ mod tests {
 
         let manager = WakeManager::new(event_tx, wake_rx);
 
-        let wake_at = manager.wake_at.expect("startup wake deadline should be set");
+        let wake_at = manager
+            .wake_at
+            .expect("startup wake deadline should be set");
         assert!(wake_at >= before_now.saturating_add(STARTUP_HEARTBEAT_DELAY_MS));
     }
 }

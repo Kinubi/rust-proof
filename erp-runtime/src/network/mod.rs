@@ -1,7 +1,7 @@
-pub mod manager;
-pub mod config;
 pub mod bootstrap;
 pub mod codec;
+pub mod config;
+pub mod manager;
 pub mod peer_registry;
 pub mod protocol;
 pub mod session;

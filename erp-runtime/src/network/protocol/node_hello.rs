@@ -1,8 +1,11 @@
-use serde::{ Deserialize, Serialize };
-use rp_core::{ crypto::{ Signature, Verifier, verifying_key_from_bytes }, traits::Hashable };
+use rp_core::{
+    crypto::{Signature, Verifier, verifying_key_from_bytes},
+    traits::Hashable,
+};
 use rp_node::contract::Identity;
+use serde::{Deserialize, Serialize};
 
-use crate::{ network::{ transport_identity::TransportIdentity }, runtime::errors::RuntimeError };
+use crate::{network::transport_identity::TransportIdentity, runtime::errors::RuntimeError};
 
 pub const NODE_HELLO_PROTOCOL: &str = "/rust-proof/node-hello/1";
 
@@ -103,30 +106,26 @@ pub struct NodeHelloVerifier;
 impl NodeHelloVerifier {
     pub fn verify(
         remote: &NodeHello,
-        authenticated_transport_peer: &[u8]
+        authenticated_transport_peer: &[u8],
     ) -> Result<VerifiedPeer, RuntimeError> {
         if remote.transport_peer_id.as_slice() != authenticated_transport_peer {
-            return Err(
-                RuntimeError::config(
-                    "node hello transport peer id does not match authenticated session peer"
-                )
-            );
+            return Err(RuntimeError::config(
+                "node hello transport peer id does not match authenticated session peer",
+            ));
         }
 
         let derived_node_peer_id = remote.node_public_key.hash();
         if derived_node_peer_id != remote.node_peer_id {
-            return Err(RuntimeError::config("node hello peer id does not match node public key"));
+            return Err(RuntimeError::config(
+                "node hello peer id does not match node public key",
+            ));
         }
 
-        let verifying_key_bytes = remote.node_public_key
-            .as_slice()
-            .try_into()
-            .map_err(|_|
-                RuntimeError::config("node hello public key must be a compressed 33-byte P-256 key")
-            )?;
-        let verifying_key = verifying_key_from_bytes(&verifying_key_bytes).map_err(
-            RuntimeError::crypto
-        )?;
+        let verifying_key_bytes = remote.node_public_key.as_slice().try_into().map_err(|_| {
+            RuntimeError::config("node hello public key must be a compressed 33-byte P-256 key")
+        })?;
+        let verifying_key =
+            verifying_key_from_bytes(&verifying_key_bytes).map_err(RuntimeError::crypto)?;
 
         let transcript = NodeHelloTranscript {
             version: remote.version,
@@ -137,9 +136,8 @@ impl NodeHelloVerifier {
             capabilities: &remote.capabilities,
         };
         let transcript_bytes = encode_transcript(&transcript)?;
-        let signature = Signature::from_slice(&remote.signature).map_err(|_|
-            RuntimeError::crypto("invalid node hello signature bytes")
-        )?;
+        let signature = Signature::from_slice(&remote.signature)
+            .map_err(|_| RuntimeError::crypto("invalid node hello signature bytes"))?;
 
         verifying_key
             .verify(&transcript_bytes, &signature)
@@ -157,7 +155,6 @@ impl NodeHelloVerifier {
 }
 
 fn encode_transcript(transcript: &NodeHelloTranscript<'_>) -> Result<Vec<u8>, RuntimeError> {
-    postcard
-        ::to_allocvec(transcript)
+    postcard::to_allocvec(transcript)
         .map_err(|_| RuntimeError::crypto("failed to serialize node hello transcript"))
 }

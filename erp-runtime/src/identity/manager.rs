@@ -1,18 +1,16 @@
 use esp_idf_hal::sys;
-use log::{ info, warn };
+use log::{info, warn};
 use rp_core::{
     crypto::{
-        Signature,
-        Signer,
-        SigningKey,
-        VerifyingKey,
-        signing_key_from_bytes,
-        verifying_key_bytes,
+        Signature, Signer, SigningKey, VerifyingKey, signing_key_from_bytes, verifying_key_bytes,
     },
     traits::Hashable,
 };
-use rp_node::{ contract::{ Identity, PeerId }, errors::ContractError };
-use sha2::{ Digest, Sha256 };
+use rp_node::{
+    contract::{Identity, PeerId},
+    errors::ContractError,
+};
+use sha2::{Digest, Sha256};
 
 use crate::runtime::errors::RuntimeError;
 
@@ -59,9 +57,7 @@ unsafe extern "C" {
 
 enum IdentityBackend {
     Software(SigningKey),
-    Efuse {
-        key_block: sys::esp_efuse_block_t,
-    },
+    Efuse { key_block: sys::esp_efuse_block_t },
 }
 
 pub struct IdentityManager {
@@ -114,9 +110,8 @@ impl IdentityManager {
     }
 
     fn development() -> Result<Self, RuntimeError> {
-        let signing_key = signing_key_from_bytes(&DEVELOPMENT_IDENTITY_SIGNING_KEY_BYTES).map_err(
-            RuntimeError::crypto
-        )?;
+        let signing_key = signing_key_from_bytes(&DEVELOPMENT_IDENTITY_SIGNING_KEY_BYTES)
+            .map_err(RuntimeError::crypto)?;
 
         Ok(Self::from_software_signing_key(signing_key))
     }
@@ -135,7 +130,8 @@ impl IdentityManager {
     }
 
     fn from_efuse_block(key_block: sys::esp_efuse_block_t) -> Result<Self, RuntimeError> {
-        let verifying_key = load_verifying_key_from_efuse(key_block).map_err(RuntimeError::crypto)?;
+        let verifying_key =
+            load_verifying_key_from_efuse(key_block).map_err(RuntimeError::crypto)?;
         let public_key = verifying_key_bytes(&verifying_key);
         let peer_id = public_key.hash();
 
@@ -200,7 +196,7 @@ fn unsupported_esp32p4_ecdsa_revision() -> Option<(u16, u16)> {
 }
 
 fn load_verifying_key_from_efuse(
-    efuse_block: sys::esp_efuse_block_t
+    efuse_block: sys::esp_efuse_block_t,
 ) -> Result<VerifyingKey, &'static str> {
     let key = import_psa_opaque_key(efuse_block)?;
 
@@ -208,24 +204,22 @@ fn load_verifying_key_from_efuse(
         let mut public_key_bytes = [0u8; UNCOMPRESSED_P256_PUBLIC_KEY_SIZE];
         let mut public_key_len = 0usize;
 
-        psa_ok(
-            sys::psa_export_public_key(
-                key.id,
-                public_key_bytes.as_mut_ptr(),
-                public_key_bytes.len(),
-                &mut public_key_len
-            )
-        ).map_err(|_| "failed to export public key from opaque PSA ECDSA key")?;
+        psa_ok(sys::psa_export_public_key(
+            key.id,
+            public_key_bytes.as_mut_ptr(),
+            public_key_bytes.len(),
+            &mut public_key_len,
+        ))
+        .map_err(|_| "failed to export public key from opaque PSA ECDSA key")?;
 
-        VerifyingKey::from_sec1_bytes(&public_key_bytes[..public_key_len]).map_err(
-            |_| "invalid P-256 public key exported from efuse"
-        )
+        VerifyingKey::from_sec1_bytes(&public_key_bytes[..public_key_len])
+            .map_err(|_| "invalid P-256 public key exported from efuse")
     }
 }
 
 fn sign_message_with_psa(
     message: &[u8],
-    efuse_block: sys::esp_efuse_block_t
+    efuse_block: sys::esp_efuse_block_t,
 ) -> Result<Signature, &'static str> {
     let key = import_psa_opaque_key(efuse_block)?;
     let message_digest = Sha256::digest(message);
@@ -235,17 +229,16 @@ fn sign_message_with_psa(
         let mut signature_bytes = [0u8; 64];
         let mut signature_len = 0usize;
 
-        psa_ok(
-            sys::psa_sign_hash(
-                key.id,
-                psa_alg_ecdsa(PSA_ALG_SHA_256),
-                message_digest.as_ptr(),
-                message_digest.len(),
-                signature_bytes.as_mut_ptr(),
-                signature_bytes.len(),
-                &mut signature_len
-            )
-        ).map_err(|_| "psa_sign_hash failed for opaque ECDSA key")?;
+        psa_ok(sys::psa_sign_hash(
+            key.id,
+            psa_alg_ecdsa(PSA_ALG_SHA_256),
+            message_digest.as_ptr(),
+            message_digest.len(),
+            signature_bytes.as_mut_ptr(),
+            signature_bytes.len(),
+            &mut signature_len,
+        ))
+        .map_err(|_| "psa_sign_hash failed for opaque ECDSA key")?;
 
         if signature_len != P256_SIGNATURE_COMPONENT_SIZE * 2 {
             return Err("opaque ECDSA signer returned unexpected signature length");
@@ -275,14 +268,13 @@ fn import_psa_opaque_key(efuse_block: sys::esp_efuse_block_t) -> Result<PsaKey, 
         };
 
         let mut key_id = 0;
-        psa_ok(
-            sys::psa_import_key(
-                &attributes,
-                (&opaque_key as *const sys::esp_ecdsa_opaque_key_t).cast(),
-                core::mem::size_of::<sys::esp_ecdsa_opaque_key_t>(),
-                &mut key_id
-            )
-        ).map_err(|_| "failed to import opaque efuse ECDSA key into PSA")?;
+        psa_ok(sys::psa_import_key(
+            &attributes,
+            (&opaque_key as *const sys::esp_ecdsa_opaque_key_t).cast(),
+            core::mem::size_of::<sys::esp_ecdsa_opaque_key_t>(),
+            &mut key_id,
+        ))
+        .map_err(|_| "failed to import opaque efuse ECDSA key into PSA")?;
 
         if key_id == 0 {
             return Err("PSA returned an invalid opaque ECDSA key id");
@@ -293,7 +285,11 @@ fn import_psa_opaque_key(efuse_block: sys::esp_efuse_block_t) -> Result<PsaKey, 
 }
 
 fn psa_ok(status: sys::psa_status_t) -> Result<(), sys::psa_status_t> {
-    if status == PSA_SUCCESS { Ok(()) } else { Err(status) }
+    if status == PSA_SUCCESS {
+        Ok(())
+    } else {
+        Err(status)
+    }
 }
 
 struct PsaKey {
@@ -311,14 +307,17 @@ impl Drop for PsaKey {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rp_core::crypto::{ Signature, Verifier, signing_key_from_bytes, verifying_key_bytes };
+    use rp_core::crypto::{Signature, Verifier, signing_key_from_bytes, verifying_key_bytes};
 
     #[test]
     fn new_derives_public_key_and_peer_id() {
         let signing_key = signing_key_from_bytes(&[3u8; 32]).unwrap();
         let manager = IdentityManager::new(signing_key);
 
-        assert_eq!(manager.public_key(), verifying_key_bytes(manager.verifying_key()));
+        assert_eq!(
+            manager.public_key(),
+            verifying_key_bytes(manager.verifying_key())
+        );
         assert_eq!(manager.peer_id(), manager.public_key().hash());
     }
 

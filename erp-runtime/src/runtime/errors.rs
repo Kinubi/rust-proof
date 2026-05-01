@@ -1,8 +1,8 @@
 use std::io::Error;
 
-use futures::channel::mpsc::SendError;
-use rp_node::errors::{ ContractError, NodeError };
 use esp_idf_hal::sys::EspError;
+use futures::channel::mpsc::SendError;
+use rp_node::errors::{ContractError, NodeError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {

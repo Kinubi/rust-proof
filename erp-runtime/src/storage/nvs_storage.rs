@@ -2,10 +2,13 @@ use core::fmt::Write;
 
 use embedded_svc::storage::RawStorage;
 use esp_idf_hal::sys::EspError;
-use esp_idf_svc::nvs::{ EspDefaultNvsPartition, EspKeyValueStorage, EspNvs, NvsDefault };
+use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspKeyValueStorage, EspNvs, NvsDefault};
 use log::warn;
-use rp_core::{ models::block::Block, traits::Hashable };
-use rp_node::{ contract::{ BlockHash, Storage }, errors::ContractError };
+use rp_core::{models::block::Block, traits::Hashable};
+use rp_node::{
+    contract::{BlockHash, Storage},
+    errors::ContractError,
+};
 use std::string::String;
 
 pub struct NvsStorage {
@@ -44,14 +47,15 @@ impl NvsStorage {
     }
 
     fn read_blob(&self, key: &str) -> Result<Option<Vec<u8>>, ContractError> {
-        let Some(len) = RawStorage::len(&self.nvs_kv_storage, key).map_err(
-            Self::map_storage_error
-        )? else {
+        let Some(len) =
+            RawStorage::len(&self.nvs_kv_storage, key).map_err(Self::map_storage_error)?
+        else {
             return Ok(None);
         };
 
         let mut buffer = vec![0u8; len];
-        let payload = self.nvs_kv_storage
+        let payload = self
+            .nvs_kv_storage
             .get_raw(key, &mut buffer)
             .map_err(Self::map_storage_error)?;
 
@@ -59,7 +63,9 @@ impl NvsStorage {
     }
 
     fn write_blob(&mut self, key: &str, bytes: &[u8]) -> Result<(), ContractError> {
-        self.nvs_kv_storage.set_raw(key, bytes).map_err(Self::map_storage_error)?;
+        self.nvs_kv_storage
+            .set_raw(key, bytes)
+            .map_err(Self::map_storage_error)?;
         Ok(())
     }
 
@@ -73,7 +79,7 @@ impl NvsStorage {
     fn load_hashed_blob(
         &self,
         prefix: char,
-        hash: &BlockHash
+        hash: &BlockHash,
     ) -> Result<Option<Vec<u8>>, ContractError> {
         for slot in u8::MIN..=u8::MAX {
             let key = Self::slot_key(prefix, hash, slot);
@@ -98,7 +104,7 @@ impl NvsStorage {
         &mut self,
         prefix: char,
         hash: &BlockHash,
-        payload: &[u8]
+        payload: &[u8],
     ) -> Result<(), ContractError> {
         let encoded = Self::encode_envelope(hash, payload);
 
@@ -144,7 +150,7 @@ impl NvsStorage {
     }
 
     pub fn load_latest_snapshot_bundle(
-        &mut self
+        &mut self,
     ) -> Result<Option<(Block, Vec<u8>)>, ContractError> {
         let block_hash = match self.read_hash_key(LATEST_SNAPSHOT_KEY) {
             Ok(Some(block_hash)) => block_hash,
@@ -212,7 +218,8 @@ impl Storage for NvsStorage {
             return Ok(None);
         };
 
-        let block: Block = postcard::from_bytes(&block_bytes).map_err(|_| ContractError::Storage)?;
+        let block: Block =
+            postcard::from_bytes(&block_bytes).map_err(|_| ContractError::Storage)?;
         if block.hash() != *hash {
             return Err(ContractError::Storage);
         }
@@ -223,7 +230,7 @@ impl Storage for NvsStorage {
     fn save_snapshot(
         &mut self,
         block_hash: &BlockHash,
-        state_bytes: &[u8]
+        state_bytes: &[u8],
     ) -> Result<(), ContractError> {
         self.save_hashed_blob(SNAPSHOT_KEY_PREFIX, block_hash, state_bytes)?;
         self.write_hash_key(LATEST_SNAPSHOT_KEY, block_hash)

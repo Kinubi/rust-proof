@@ -1,9 +1,9 @@
 use rp_core::{
-    crypto::{ Signature, VerifyingKey, verifying_key_from_bytes },
-    models::{ block::Block, slashing::SlashProof, transaction::Transaction },
+    crypto::{Signature, VerifyingKey, verifying_key_from_bytes},
+    models::{block::Block, slashing::SlashProof, transaction::Transaction},
     traits::Hashable,
 };
-use rp_node::{ blockchain::Blockchain, contract::Identity, errors::ContractError };
+use rp_node::{blockchain::Blockchain, contract::Identity, errors::ContractError};
 
 use crate::runtime::errors::RuntimeError;
 
@@ -13,7 +13,7 @@ pub(crate) fn build_signed_block(
     transactions: Vec<Transaction>,
     slash_proofs: Vec<SlashProof>,
     state_root: [u8; 32],
-    identity: &impl Identity
+    identity: &impl Identity,
 ) -> Result<Block, RuntimeError> {
     let mut block = Block {
         height: parent.height + 1,
@@ -40,7 +40,7 @@ pub(crate) fn build_probe_block(identity: &impl Identity) -> Result<Block, Runti
         vec![],
         vec![],
         blockchain.state.compute_state_root(),
-        identity
+        identity,
     )
 }
 
@@ -65,8 +65,8 @@ mod tests {
     use super::*;
 
     use crate::identity::manager::IdentityManager;
-    use rp_core::{ crypto::signing_key_from_bytes, traits::ToBytes };
-    use rp_node::contract::{ NodeAction, NodeInput };
+    use rp_core::{crypto::signing_key_from_bytes, traits::ToBytes};
+    use rp_node::contract::{NodeAction, NodeInput};
     use rp_node::node_engine::NodeEngine;
 
     #[test]
@@ -81,15 +81,17 @@ mod tests {
             vec![],
             vec![],
             blockchain.state.compute_state_root(),
-            &identity
-        ).unwrap();
+            &identity,
+        )
+        .unwrap();
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
         let actions = engine.step(NodeInput::FrameReceived {
             peer: [0u8; 32],
-            frame: rp_node::network::message::NetworkMessage
-                ::AnnounceRequest(rp_node::network::message::AnnounceRequest::block(block))
-                .to_bytes(),
+            frame: rp_node::network::message::NetworkMessage::AnnounceRequest(
+                rp_node::network::message::AnnounceRequest::block(block),
+            )
+            .to_bytes(),
         });
 
         assert_eq!(actions.len(), 2);

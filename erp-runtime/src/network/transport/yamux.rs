@@ -1,11 +1,11 @@
 use std::io;
 
 use futures::future::poll_fn;
-use futures::io::{ AsyncRead, AsyncWrite };
-use yamux::{ Connection, Mode, Stream };
+use futures::io::{AsyncRead, AsyncWrite};
+use yamux::{Connection, Mode, Stream};
 
 use crate::{
-    network::transport::multistream::{ dialer_select, listener_select },
+    network::transport::multistream::{dialer_select, listener_select},
     runtime::errors::RuntimeError,
 };
 
@@ -20,19 +20,27 @@ pub struct YamuxSession<M> {
     pub muxer: M,
 }
 
-impl<S> YamuxMuxer<S> where S: AsyncRead + AsyncWrite + Unpin {
+impl<S> YamuxMuxer<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     pub async fn open_substream(&mut self) -> Result<Stream, RuntimeError> {
-        poll_fn(|cx| self.connection.poll_new_outbound(cx)).await.map_err(map_connection_error)
+        poll_fn(|cx| self.connection.poll_new_outbound(cx))
+            .await
+            .map_err(map_connection_error)
     }
 
     pub async fn accept_substream(&mut self) -> Result<Option<Stream>, RuntimeError> {
-        poll_fn(|cx| self.connection.poll_next_inbound(cx)).await
+        poll_fn(|cx| self.connection.poll_next_inbound(cx))
+            .await
             .transpose()
             .map_err(map_connection_error)
     }
 
     pub async fn close(&mut self) -> Result<(), RuntimeError> {
-        poll_fn(|cx| self.connection.poll_close(cx)).await.map_err(map_connection_error)
+        poll_fn(|cx| self.connection.poll_close(cx))
+            .await
+            .map_err(map_connection_error)
     }
 
     pub fn connection_mut(&mut self) -> &mut Connection<S> {
@@ -41,7 +49,8 @@ impl<S> YamuxMuxer<S> where S: AsyncRead + AsyncWrite + Unpin {
 }
 
 pub async fn upgrade_outbound<S>(mut stream: S) -> Result<YamuxSession<YamuxMuxer<S>>, RuntimeError>
-    where S: AsyncRead + AsyncWrite + Unpin
+where
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     dialer_select(&mut stream, YAMUX_PROTOCOL).await?;
 
@@ -53,7 +62,8 @@ pub async fn upgrade_outbound<S>(mut stream: S) -> Result<YamuxSession<YamuxMuxe
 }
 
 pub async fn upgrade_inbound<S>(mut stream: S) -> Result<YamuxSession<YamuxMuxer<S>>, RuntimeError>
-    where S: AsyncRead + AsyncWrite + Unpin
+where
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     listener_select(&mut stream, &[YAMUX_PROTOCOL]).await?;
 
@@ -67,9 +77,9 @@ pub async fn upgrade_inbound<S>(mut stream: S) -> Result<YamuxSession<YamuxMuxer
 fn yamux_config() -> yamux::Config {
     let mut config = yamux::Config::default();
     config.set_max_num_streams(DEFAULT_MAX_SUBSTREAMS);
-    config.set_max_connection_receive_window(
-        Some(DEFAULT_MAX_SUBSTREAMS * (yamux::DEFAULT_CREDIT as usize))
-    );
+    config.set_max_connection_receive_window(Some(
+        DEFAULT_MAX_SUBSTREAMS * (yamux::DEFAULT_CREDIT as usize),
+    ));
     config
 }
 

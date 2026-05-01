@@ -1,10 +1,13 @@
-use std::{ io::{ ErrorKind, Read, Write }, net::{ Shutdown, SocketAddr, TcpListener, TcpStream } };
+use std::{
+    io::{ErrorKind, Read, Write},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+};
 
-use embassy_time::{ Duration, Timer };
+use embassy_time::{Duration, Timer};
 use futures::io::AllowStdIo;
-use socket2::{ Domain, Protocol, SockAddr, Socket, Type };
+use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
-use crate::{ network::socket::traits::SocketFactory, runtime::errors::RuntimeError };
+use crate::{network::socket::traits::SocketFactory, runtime::errors::RuntimeError};
 
 const SOCKET_RETRY_DELAY_MS: u64 = 10;
 
@@ -34,7 +37,9 @@ impl EspTcpStream {
     }
 
     pub fn into_blocking(self) -> Result<TcpStream, RuntimeError> {
-        self.stream.set_nonblocking(false).map_err(RuntimeError::NetworkError)?;
+        self.stream
+            .set_nonblocking(false)
+            .map_err(RuntimeError::NetworkError)?;
         Ok(self.stream)
     }
 
@@ -47,16 +52,16 @@ impl EspTcpStream {
         while read < buf.len() {
             match self.stream.read(&mut buf[read..]) {
                 Ok(0) => {
-                    return Err(
-                        RuntimeError::NetworkError(std::io::Error::from(ErrorKind::UnexpectedEof))
-                    );
+                    return Err(RuntimeError::NetworkError(std::io::Error::from(
+                        ErrorKind::UnexpectedEof,
+                    )));
                 }
                 Ok(len) => {
                     read += len;
                 }
-                Err(error) if
-                    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
-                => {
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+                {
                     Timer::after(Duration::from_millis(SOCKET_RETRY_DELAY_MS)).await;
                 }
                 Err(error) => {
@@ -73,16 +78,16 @@ impl EspTcpStream {
         while written < buf.len() {
             match self.stream.write(&buf[written..]) {
                 Ok(0) => {
-                    return Err(
-                        RuntimeError::NetworkError(std::io::Error::from(ErrorKind::WriteZero))
-                    );
+                    return Err(RuntimeError::NetworkError(std::io::Error::from(
+                        ErrorKind::WriteZero,
+                    )));
                 }
                 Ok(len) => {
                     written += len;
                 }
-                Err(error) if
-                    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
-                => {
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+                {
                     Timer::after(Duration::from_millis(SOCKET_RETRY_DELAY_MS)).await;
                 }
                 Err(error) => {
@@ -100,9 +105,9 @@ impl EspTcpStream {
                 Ok(()) => {
                     return Ok(());
                 }
-                Err(error) if
-                    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
-                => {
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) =>
+                {
                     Timer::after(Duration::from_millis(SOCKET_RETRY_DELAY_MS)).await;
                 }
                 Err(error) => {
@@ -113,7 +118,9 @@ impl EspTcpStream {
     }
 
     pub fn shutdown(&mut self) -> Result<(), RuntimeError> {
-        self.stream.shutdown(Shutdown::Both).map_err(RuntimeError::NetworkError)
+        self.stream
+            .shutdown(Shutdown::Both)
+            .map_err(RuntimeError::NetworkError)
     }
 }
 
@@ -129,29 +136,32 @@ impl SocketFactory for EspSocketFactory {
 
     fn bind(
         &self,
-        port: u16
+        port: u16,
     ) -> impl std::future::Future<Output = Result<Self::TcpListener, RuntimeError>> + Send {
         let addr = SocketAddr::new(self.addr.ip(), port);
 
         async move {
             let listener = TcpListener::bind(addr).map_err(RuntimeError::NetworkError)?;
-            listener.set_nonblocking(true).map_err(RuntimeError::NetworkError)?;
+            listener
+                .set_nonblocking(true)
+                .map_err(RuntimeError::NetworkError)?;
             Ok(EspTcpListener { listener })
         }
     }
 
     fn accept(
         &self,
-        listener: &mut Self::TcpListener
+        listener: &mut Self::TcpListener,
     ) -> impl std::future::Future<
-        Output = Result<(Self::TcpStream, std::net::SocketAddr), RuntimeError>
-    > +
-        Send {
+        Output = Result<(Self::TcpStream, std::net::SocketAddr), RuntimeError>,
+    > + Send {
         async move {
             loop {
                 match listener.listener.accept() {
                     Ok((stream, peer_addr)) => {
-                        stream.set_nonblocking(true).map_err(RuntimeError::NetworkError)?;
+                        stream
+                            .set_nonblocking(true)
+                            .map_err(RuntimeError::NetworkError)?;
                         return Ok((EspTcpStream { stream }, peer_addr));
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {
@@ -167,7 +177,7 @@ impl SocketFactory for EspSocketFactory {
 
     fn connect(
         &self,
-        addr: std::net::SocketAddr
+        addr: std::net::SocketAddr,
     ) -> impl std::future::Future<Output = Result<Self::TcpStream, RuntimeError>> + Send {
         async move {
             let socket = Socket::new(
@@ -176,19 +186,21 @@ impl SocketFactory for EspSocketFactory {
                     SocketAddr::V6(_) => Domain::IPV6,
                 },
                 Type::STREAM,
-                Some(Protocol::TCP)
-            ).map_err(RuntimeError::NetworkError)?;
+                Some(Protocol::TCP),
+            )
+            .map_err(RuntimeError::NetworkError)?;
 
-            socket.set_nonblocking(true).map_err(RuntimeError::NetworkError)?;
+            socket
+                .set_nonblocking(true)
+                .map_err(RuntimeError::NetworkError)?;
 
             match socket.connect(&SockAddr::from(addr)) {
                 Ok(()) => {
                     let stream: TcpStream = socket.into();
                     return Ok(EspTcpStream { stream });
                 }
-                Err(error) if
-                    matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted)
-                => {}
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
                 Err(error) => {
                     return Err(RuntimeError::NetworkError(error));
                 }

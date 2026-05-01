@@ -1,9 +1,9 @@
-use rp_node::network::message::{ SyncRequest, SyncResponse };
+use rp_node::network::message::{SyncRequest, SyncResponse};
 
 use crate::{
     network::codec::{
-        length_prefixed::{ decode_length_prefix, encode_length_prefixed },
-        postcard_codec::{ PostcardCodec, ValueCodec },
+        length_prefixed::{decode_length_prefix, encode_length_prefixed},
+        postcard_codec::{PostcardCodec, ValueCodec},
     },
     runtime::errors::RuntimeError,
 };
