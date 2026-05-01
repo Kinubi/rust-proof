@@ -31,6 +31,7 @@ rp-core = { path = "../rp-core" }
 rp-node = { path = "../rp-node" }
 rand = "0.10.1"
 sha2 = "0.11.0"
+libc = "0.2"
 socket2 = "0.5"
 unsigned-varint = "0.8"
 quick-protobuf = "0.8.1"

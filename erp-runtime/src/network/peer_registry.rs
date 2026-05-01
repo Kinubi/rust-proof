@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{ collections::BTreeMap, net::SocketAddr };
 
 use crate::runtime::errors::RuntimeError;
 
@@ -6,6 +6,8 @@ pub type SessionId = usize;
 
 pub struct PeerSession {
     pub id: SessionId,
+    pub is_outbound: bool,
+    pub outbound_addr: Option<SocketAddr>,
     pub node_peer_id: Option<[u8; 32]>,
     pub transport_peer_id: Vec<u8>,
     pub state: SessionState,
@@ -38,15 +40,22 @@ impl PeerRegistry {
         }
     }
 
-    pub fn alloc(&mut self, transport_peer_id: Vec<u8>) -> Result<SessionId, RuntimeError> {
-        if let Some((session_id, slot)) = self
-            .sessions
-            .iter_mut()
-            .enumerate()
-            .find(|(_, slot)| slot.is_none())
+    pub fn alloc(
+        &mut self,
+        transport_peer_id: Vec<u8>,
+        is_outbound: bool,
+        outbound_addr: Option<SocketAddr>
+    ) -> Result<SessionId, RuntimeError> {
+        if
+            let Some((session_id, slot)) = self.sessions
+                .iter_mut()
+                .enumerate()
+                .find(|(_, slot)| slot.is_none())
         {
             *slot = Some(PeerSession {
                 id: session_id,
+                is_outbound,
+                outbound_addr,
                 node_peer_id: None,
                 transport_peer_id,
                 state: SessionState::TcpConnected,
@@ -62,15 +71,19 @@ impl PeerRegistry {
         }
 
         let session_id = self.sessions.len();
-        self.sessions.push(Some(PeerSession {
-            id: session_id,
-            node_peer_id: None,
-            transport_peer_id,
-            state: SessionState::TcpConnected,
-            max_frame_len: 0,
-            max_blocks_per_chunk: 0,
-            last_seen_ms: 0,
-        }));
+        self.sessions.push(
+            Some(PeerSession {
+                id: session_id,
+                is_outbound,
+                outbound_addr,
+                node_peer_id: None,
+                transport_peer_id,
+                state: SessionState::TcpConnected,
+                max_frame_len: 0,
+                max_blocks_per_chunk: 0,
+                last_seen_ms: 0,
+            })
+        );
         Ok(session_id)
     }
 
@@ -85,19 +98,17 @@ impl PeerRegistry {
     pub fn register_node_peer(
         &mut self,
         id: SessionId,
-        node_peer_id: [u8; 32],
+        node_peer_id: [u8; 32]
     ) -> Result<(), RuntimeError> {
         if let Some(existing) = self.by_node_peer.get(&node_peer_id) {
             if *existing != id {
-                return Err(RuntimeError::config(
-                    "node peer is already registered to another session",
-                ));
+                return Err(
+                    RuntimeError::config("node peer is already registered to another session")
+                );
             }
         }
 
-        let session = self
-            .get_mut(id)
-            .ok_or_else(|| RuntimeError::config("unknown peer session"))?;
+        let session = self.get_mut(id).ok_or_else(|| RuntimeError::config("unknown peer session"))?;
         session.node_peer_id = Some(node_peer_id);
         self.by_node_peer.insert(node_peer_id, id);
         Ok(())
@@ -116,6 +127,23 @@ impl PeerRegistry {
                 matches!(session.state, SessionState::NodeReady).then_some(session_id)
             })
             .collect()
+    }
+
+    pub fn outbound_session_count(&self) -> usize {
+        self.sessions
+            .iter()
+            .filter_map(Option::as_ref)
+            .filter(|session| session.is_outbound)
+            .count()
+    }
+
+    pub fn has_outbound_session_for(&self, address: &SocketAddr) -> bool {
+        self.sessions
+            .iter()
+            .filter_map(Option::as_ref)
+            .any(|session| {
+                session.outbound_addr.as_ref().is_some_and(|outbound_addr| outbound_addr == address)
+            })
     }
 
     pub fn remove(&mut self, id: SessionId) -> Option<PeerSession> {
