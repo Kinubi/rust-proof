@@ -1,17 +1,21 @@
-use std::{
-    io::{self, Error, ErrorKind},
-    pin::Pin,
-    task::{Context, Poll, ready},
-};
+use std::{ io::{ self, Error, ErrorKind }, pin::Pin, task::{ Context, Poll, ready } };
 
-use futures::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use futures::io::{ AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt };
 use libp2p_identity::PublicKey;
+use log::{ info, warn };
 use quick_protobuf::{
-    BytesReader, MessageRead, MessageWrite, Writer, WriterBackend, sizeofs::sizeof_len,
+    BytesReader,
+    MessageRead,
+    MessageWrite,
+    Writer,
+    WriterBackend,
+    sizeofs::sizeof_len,
 };
-use snow::{HandshakeState, TransportState};
+use snow::{ HandshakeState, TransportState };
 
-use crate::{network::transport_identity::TransportIdentityManager, runtime::errors::RuntimeError};
+use crate::{ network::transport_identity::TransportIdentityManager, runtime::errors::RuntimeError };
+
+const TAG: &str = "noise";
 
 pub const NOISE_PROTOCOL: &str = "/noise";
 pub const NOISE_PROTOCOL_NAME: &str = "Noise_XX_25519_ChaChaPoly_SHA256";
@@ -58,8 +62,7 @@ impl<S> NoiseStream<S> {
     }
 
     fn poll_fill_plaintext(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<bool>>
-    where
-        S: AsyncRead + Unpin,
+        where S: AsyncRead + Unpin
     {
         loop {
             if self.read_plaintext_pos < self.read_plaintext.len() {
@@ -71,18 +74,26 @@ impl<S> NoiseStream<S> {
 
             if self.read_frame_len.is_none() {
                 while self.read_len_pos < self.read_len_buf.len() {
-                    match ready!(
-                        Pin::new(&mut self.inner)
-                            .poll_read(cx, &mut self.read_len_buf[self.read_len_pos..])
-                    ) {
+                    match
+                        ready!(
+                            Pin::new(&mut self.inner).poll_read(
+                                cx,
+                                &mut self.read_len_buf[self.read_len_pos..]
+                            )
+                        )
+                    {
                         Ok(0) if self.read_len_pos == 0 => {
                             return Poll::Ready(Ok(false));
                         }
                         Ok(0) => {
-                            return Poll::Ready(Err(Error::new(
-                                ErrorKind::UnexpectedEof,
-                                "noise frame ended while reading length prefix",
-                            )));
+                            return Poll::Ready(
+                                Err(
+                                    Error::new(
+                                        ErrorKind::UnexpectedEof,
+                                        "noise frame ended while reading length prefix"
+                                    )
+                                )
+                            );
                         }
                         Ok(read) => {
                             self.read_len_pos += read;
@@ -100,19 +111,27 @@ impl<S> NoiseStream<S> {
                 self.read_encrypted_pos = 0;
             }
 
-            let frame_len = self
-                .read_frame_len
-                .expect("frame length is always set before body reads begin");
+            let frame_len = self.read_frame_len.expect(
+                "frame length is always set before body reads begin"
+            );
             while self.read_encrypted_pos < frame_len {
-                match ready!(Pin::new(&mut self.inner).poll_read(
-                    cx,
-                    &mut self.read_encrypted[self.read_encrypted_pos..frame_len]
-                )) {
+                match
+                    ready!(
+                        Pin::new(&mut self.inner).poll_read(
+                            cx,
+                            &mut self.read_encrypted[self.read_encrypted_pos..frame_len]
+                        )
+                    )
+                {
                     Ok(0) => {
-                        return Poll::Ready(Err(Error::new(
-                            ErrorKind::UnexpectedEof,
-                            "noise frame ended while reading ciphertext",
-                        )));
+                        return Poll::Ready(
+                            Err(
+                                Error::new(
+                                    ErrorKind::UnexpectedEof,
+                                    "noise frame ended while reading ciphertext"
+                                )
+                            )
+                        );
                     }
                     Ok(read) => {
                         self.read_encrypted_pos += read;
@@ -124,8 +143,7 @@ impl<S> NoiseStream<S> {
             }
 
             let mut plaintext = vec![0u8; frame_len];
-            let plaintext_len = self
-                .session
+            let plaintext_len = self.session
                 .read_message(&self.read_encrypted, &mut plaintext)
                 .map_err(noise_to_io_error)?;
             plaintext.truncate(plaintext_len);
@@ -146,24 +164,20 @@ impl<S> NoiseStream<S> {
     fn queue_encrypted_frame(&mut self, plaintext: &[u8]) -> io::Result<usize> {
         let plaintext_len = plaintext.len().min(MAX_NOISE_PLAINTEXT_LEN);
         let mut ciphertext = vec![0u8; plaintext_len + NOISE_TAG_LEN];
-        let ciphertext_len = self
-            .session
+        let ciphertext_len = self.session
             .write_message(&plaintext[..plaintext_len], &mut ciphertext)
             .map_err(noise_to_io_error)?;
 
         self.write_frame.clear();
-        self.write_frame
-            .extend_from_slice(&(ciphertext_len as u16).to_be_bytes());
-        self.write_frame
-            .extend_from_slice(&ciphertext[..ciphertext_len]);
+        self.write_frame.extend_from_slice(&(ciphertext_len as u16).to_be_bytes());
+        self.write_frame.extend_from_slice(&ciphertext[..ciphertext_len]);
         self.write_frame_pos = 0;
 
         Ok(plaintext_len)
     }
 
     fn poll_flush_pending_frame(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>>
-    where
-        S: AsyncWrite + Unpin,
+        where S: AsyncWrite + Unpin
     {
         while self.write_frame_pos < self.write_frame.len() {
             let written = ready!(
@@ -171,10 +185,9 @@ impl<S> NoiseStream<S> {
             )?;
 
             if written == 0 {
-                return Poll::Ready(Err(Error::new(
-                    ErrorKind::WriteZero,
-                    "failed to flush buffered noise frame",
-                )));
+                return Poll::Ready(
+                    Err(Error::new(ErrorKind::WriteZero, "failed to flush buffered noise frame"))
+                );
             }
 
             self.write_frame_pos += written;
@@ -186,14 +199,11 @@ impl<S> NoiseStream<S> {
     }
 }
 
-impl<S> AsyncRead for NoiseStream<S>
-where
-    S: AsyncRead + Unpin,
-{
+impl<S> AsyncRead for NoiseStream<S> where S: AsyncRead + Unpin {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
+        buf: &mut [u8]
     ) -> Poll<io::Result<usize>> {
         if buf.is_empty() {
             return Poll::Ready(Ok(0));
@@ -217,14 +227,11 @@ where
     }
 }
 
-impl<S> AsyncWrite for NoiseStream<S>
-where
-    S: AsyncWrite + Unpin,
-{
+impl<S> AsyncWrite for NoiseStream<S> where S: AsyncWrite + Unpin {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &[u8],
+        buf: &[u8]
     ) -> Poll<io::Result<usize>> {
         if !self.write_frame.is_empty() {
             match self.poll_flush_pending_frame(cx) {
@@ -268,29 +275,21 @@ where
 
 pub async fn upgrade_outbound<S>(
     stream: S,
-    identity: &TransportIdentityManager,
+    identity: &TransportIdentityManager
 ) -> Result<NoiseUpgradeOutput<NoiseStream<S>>, RuntimeError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
+    where S: AsyncRead + AsyncWrite + Unpin
 {
     let local_static = generate_local_static_keypair()?;
     let local_payload = build_local_identity_payload(&local_static.public, identity)?;
     let mut handshake = build_handshake_state(true, &local_static.private)?;
     let mut stream = stream;
 
-    send_handshake_payload(
-        &mut stream,
-        &mut handshake,
-        &NoiseHandshakePayload::default(),
-    )
-    .await?;
+    send_handshake_payload(&mut stream, &mut handshake, &NoiseHandshakePayload::default()).await?;
     let remote_payload = recv_handshake_payload(&mut stream, &mut handshake).await?;
     let remote_identity = verify_remote_identity(&handshake, &remote_payload)?;
     send_handshake_payload(&mut stream, &mut handshake, &local_payload).await?;
 
-    let transport = handshake
-        .into_transport_mode()
-        .map_err(noise_to_runtime_error)?;
+    let transport = handshake.into_transport_mode().map_err(noise_to_runtime_error)?;
 
     Ok(NoiseUpgradeOutput {
         stream: NoiseStream::new(stream, transport),
@@ -301,10 +300,9 @@ where
 
 pub async fn upgrade_inbound<S>(
     stream: S,
-    identity: &TransportIdentityManager,
+    identity: &TransportIdentityManager
 ) -> Result<NoiseUpgradeOutput<NoiseStream<S>>, RuntimeError>
-where
-    S: AsyncRead + AsyncWrite + Unpin,
+    where S: AsyncRead + AsyncWrite + Unpin
 {
     let local_static = generate_local_static_keypair()?;
     let local_payload = build_local_identity_payload(&local_static.public, identity)?;
@@ -313,18 +311,14 @@ where
 
     let first_payload = recv_handshake_payload(&mut stream, &mut handshake).await?;
     if !first_payload.is_empty() {
-        return Err(RuntimeError::config(
-            "noise initiator sent a non-empty first payload",
-        ));
+        return Err(RuntimeError::config("noise initiator sent a non-empty first payload"));
     }
 
     send_handshake_payload(&mut stream, &mut handshake, &local_payload).await?;
     let remote_payload = recv_handshake_payload(&mut stream, &mut handshake).await?;
     let remote_identity = verify_remote_identity(&handshake, &remote_payload)?;
 
-    let transport = handshake
-        .into_transport_mode()
-        .map_err(noise_to_runtime_error)?;
+    let transport = handshake.into_transport_mode().map_err(noise_to_runtime_error)?;
 
     Ok(NoiseUpgradeOutput {
         stream: NoiseStream::new(stream, transport),
@@ -365,12 +359,9 @@ impl<'a> MessageRead<'a> for NoiseExtensions {
         let mut message = Self::default();
         while !reader.is_eof() {
             match reader.next_tag(bytes) {
-                Ok(10) => message
-                    .webtransport_certhashes
-                    .push(reader.read_bytes(bytes)?.to_owned()),
-                Ok(18) => message
-                    .stream_muxers
-                    .push(reader.read_string(bytes)?.to_owned()),
+                Ok(10) =>
+                    message.webtransport_certhashes.push(reader.read_bytes(bytes)?.to_owned()),
+                Ok(18) => message.stream_muxers.push(reader.read_string(bytes)?.to_owned()),
                 Ok(tag) => reader.read_unknown(bytes, tag)?,
                 Err(error) => {
                     return Err(error);
@@ -386,9 +377,8 @@ impl MessageWrite for NoiseExtensions {
         self.webtransport_certhashes
             .iter()
             .map(|value| 1 + sizeof_len(value.len()))
-            .sum::<usize>()
-            + self
-                .stream_muxers
+            .sum::<usize>() +
+            self.stream_muxers
                 .iter()
                 .map(|value| 1 + sizeof_len(value.len()))
                 .sum::<usize>()
@@ -396,7 +386,7 @@ impl MessageWrite for NoiseExtensions {
 
     fn write_message<W: WriterBackend>(
         &self,
-        writer: &mut Writer<W>,
+        writer: &mut Writer<W>
     ) -> quick_protobuf::Result<()> {
         for value in &self.webtransport_certhashes {
             writer.write_with_tag(10, |writer| writer.write_bytes(value))?;
@@ -444,8 +434,7 @@ impl MessageWrite for NoiseHandshakePayload {
         } else {
             1 + sizeof_len(self.identity_sig.len())
         };
-        let extensions_size = self
-            .extensions
+        let extensions_size = self.extensions
             .as_ref()
             .map_or(0, |extensions| 1 + sizeof_len(extensions.get_size()));
 
@@ -454,7 +443,7 @@ impl MessageWrite for NoiseHandshakePayload {
 
     fn write_message<W: WriterBackend>(
         &self,
-        writer: &mut Writer<W>,
+        writer: &mut Writer<W>
     ) -> quick_protobuf::Result<()> {
         if !self.identity_key.is_empty() {
             writer.write_with_tag(10, |writer| writer.write_bytes(&self.identity_key))?;
@@ -470,9 +459,9 @@ impl MessageWrite for NoiseHandshakePayload {
 }
 
 fn generate_local_static_keypair() -> Result<LocalStaticKeypair, RuntimeError> {
-    let params = NOISE_PROTOCOL_NAME
-        .parse()
-        .map_err(|_| RuntimeError::config("invalid noise protocol parameters"))?;
+    let params = NOISE_PROTOCOL_NAME.parse().map_err(|_|
+        RuntimeError::config("invalid noise protocol parameters")
+    )?;
     let builder = snow::Builder::new(params);
     let keypair = builder.generate_keypair().map_err(noise_to_runtime_error)?;
 
@@ -484,11 +473,11 @@ fn generate_local_static_keypair() -> Result<LocalStaticKeypair, RuntimeError> {
 
 fn build_handshake_state(
     initiator: bool,
-    local_private_key: &[u8],
+    local_private_key: &[u8]
 ) -> Result<HandshakeState, RuntimeError> {
-    let params = NOISE_PROTOCOL_NAME
-        .parse()
-        .map_err(|_| RuntimeError::config("invalid noise protocol parameters"))?;
+    let params = NOISE_PROTOCOL_NAME.parse().map_err(|_|
+        RuntimeError::config("invalid noise protocol parameters")
+    )?;
     let builder = snow::Builder::new(params).local_private_key(local_private_key);
 
     if initiator {
@@ -500,7 +489,7 @@ fn build_handshake_state(
 
 fn build_local_identity_payload(
     local_static_public_key: &[u8],
-    identity: &TransportIdentityManager,
+    identity: &TransportIdentityManager
 ) -> Result<NoiseHandshakePayload, RuntimeError> {
     let signature_input = [STATIC_KEY_DOMAIN.as_bytes(), local_static_public_key].concat();
 
@@ -513,32 +502,38 @@ fn build_local_identity_payload(
 
 fn verify_remote_identity(
     handshake: &HandshakeState,
-    payload: &NoiseHandshakePayload,
+    payload: &NoiseHandshakePayload
 ) -> Result<PublicKey, RuntimeError> {
-    let remote_static_public_key = handshake.get_remote_static().ok_or_else(|| {
-        RuntimeError::config("noise handshake did not expose a remote static key")
-    })?;
+    let remote_static_public_key = handshake
+        .get_remote_static()
+        .ok_or_else(|| {
+            RuntimeError::config("noise handshake did not expose a remote static key")
+        })?;
+
+    info!(target: TAG, "verify_remote_identity: identity_key len={}, identity_sig len={}",
+        payload.identity_key.len(), payload.identity_sig.len());
 
     if payload.identity_key.is_empty() {
-        return Err(RuntimeError::config(
-            "noise handshake payload is missing a transport public key",
-        ));
+        return Err(
+            RuntimeError::config("noise handshake payload is missing a transport public key")
+        );
     }
     if payload.identity_sig.is_empty() {
-        return Err(RuntimeError::config(
-            "noise handshake payload is missing a transport signature",
-        ));
+        return Err(
+            RuntimeError::config("noise handshake payload is missing a transport signature")
+        );
     }
 
-    let public_key = PublicKey::try_decode_protobuf(&payload.identity_key).map_err(|_| {
+    info!(target: TAG, "identity_key bytes: {:02x?}", &payload.identity_key[..payload.identity_key.len().min(64)]);
+
+    let public_key = PublicKey::try_decode_protobuf(&payload.identity_key).map_err(|e| {
+        warn!(target: TAG, "try_decode_protobuf failed: {:?}", e);
         RuntimeError::crypto("noise handshake payload contains an invalid transport public key")
     })?;
     let signature_input = [STATIC_KEY_DOMAIN.as_bytes(), remote_static_public_key].concat();
 
     if !public_key.verify(&signature_input, &payload.identity_sig) {
-        return Err(RuntimeError::config(
-            "noise handshake transport signature verification failed",
-        ));
+        return Err(RuntimeError::config("noise handshake transport signature verification failed"));
     }
 
     Ok(public_key)
@@ -547,10 +542,9 @@ fn verify_remote_identity(
 async fn send_handshake_payload<S>(
     stream: &mut S,
     handshake: &mut HandshakeState,
-    payload: &NoiseHandshakePayload,
+    payload: &NoiseHandshakePayload
 ) -> Result<(), RuntimeError>
-where
-    S: AsyncWrite + Unpin,
+    where S: AsyncWrite + Unpin
 {
     let payload_bytes = encode_payload(payload)?;
     let mut ciphertext = vec![0u8; MAX_NOISE_FRAME_LEN];
@@ -559,35 +553,24 @@ where
         .map_err(noise_to_runtime_error)?;
 
     stream
-        .write_all(&(ciphertext_len as u16).to_be_bytes())
-        .await
+        .write_all(&(ciphertext_len as u16).to_be_bytes()).await
         .map_err(RuntimeError::NetworkError)?;
-    stream
-        .write_all(&ciphertext[..ciphertext_len])
-        .await
-        .map_err(RuntimeError::NetworkError)?;
+    stream.write_all(&ciphertext[..ciphertext_len]).await.map_err(RuntimeError::NetworkError)?;
     stream.flush().await.map_err(RuntimeError::NetworkError)
 }
 
 async fn recv_handshake_payload<S>(
     stream: &mut S,
-    handshake: &mut HandshakeState,
+    handshake: &mut HandshakeState
 ) -> Result<NoiseHandshakePayload, RuntimeError>
-where
-    S: AsyncRead + Unpin,
+    where S: AsyncRead + Unpin
 {
     let mut len_bytes = [0u8; 2];
-    stream
-        .read_exact(&mut len_bytes)
-        .await
-        .map_err(RuntimeError::NetworkError)?;
+    stream.read_exact(&mut len_bytes).await.map_err(RuntimeError::NetworkError)?;
     let frame_len = u16::from_be_bytes(len_bytes) as usize;
 
     let mut ciphertext = vec![0u8; frame_len];
-    stream
-        .read_exact(&mut ciphertext)
-        .await
-        .map_err(RuntimeError::NetworkError)?;
+    stream.read_exact(&mut ciphertext).await.map_err(RuntimeError::NetworkError)?;
 
     let mut plaintext = vec![0u8; frame_len];
     let plaintext_len = handshake
@@ -608,8 +591,9 @@ fn encode_payload(payload: &NoiseHandshakePayload) -> Result<Vec<u8>, RuntimeErr
 
 fn decode_payload(bytes: &[u8]) -> Result<NoiseHandshakePayload, RuntimeError> {
     let mut reader = BytesReader::from_bytes(bytes);
-    NoiseHandshakePayload::from_reader(&mut reader, bytes)
-        .map_err(|_| RuntimeError::crypto("failed to decode noise handshake payload"))
+    NoiseHandshakePayload::from_reader(&mut reader, bytes).map_err(|_|
+        RuntimeError::crypto("failed to decode noise handshake payload")
+    )
 }
 
 fn noise_to_runtime_error(error: snow::Error) -> RuntimeError {
@@ -617,8 +601,5 @@ fn noise_to_runtime_error(error: snow::Error) -> RuntimeError {
 }
 
 fn noise_to_io_error(error: snow::Error) -> io::Error {
-    io::Error::new(
-        ErrorKind::InvalidData,
-        format!("noise transport error: {error}"),
-    )
+    io::Error::new(ErrorKind::InvalidData, format!("noise transport error: {error}"))
 }

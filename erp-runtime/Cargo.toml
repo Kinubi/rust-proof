@@ -26,7 +26,7 @@ edge-executor = "0.4.1"
 embedded-svc = "0.29.0"
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }
-libp2p-identity = { version = "0.2.13", default-features = false, features = ["ecdsa", "peerid", "rand"] }
+libp2p-identity = { version = "0.2.13", default-features = false, features = ["ecdsa", "ed25519", "peerid", "rand"] }
 rp-core = { path = "../rp-core" }
 rp-node = { path = "../rp-node" }
 rand = "0.10.1"

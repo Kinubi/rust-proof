@@ -1,14 +1,14 @@
-use std::io::{ErrorKind, Read, Write};
+use std::io::{ ErrorKind, Read, Write };
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{ Context, Poll };
 
-use embassy_time::{Duration, Timer};
-use futures::io::{AsyncRead, AsyncWrite};
-use log::{info, warn};
-use socket2::{Socket, Domain, Type, Protocol, SockAddr};
+use embassy_time::{ Duration, Timer };
+use futures::io::{ AsyncRead, AsyncWrite };
+use log::{ info, warn };
+use socket2::{ Socket, Domain, Type, Protocol, SockAddr };
 use futures::Future;
 
-use crate::{network::socket::traits::SocketFactory, runtime::errors::RuntimeError};
+use crate::{ network::socket::traits::SocketFactory, runtime::errors::RuntimeError };
 
 const TAG: &str = "socket";
 const SOCKET_RETRY_DELAY_MS: u64 = 10;
@@ -55,7 +55,7 @@ impl AsyncRead for EspTcpStream {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &mut [u8],
+        buf: &mut [u8]
     ) -> Poll<std::io::Result<usize>> {
         // socket2::Socket implements std::io::Read
         match (&mut self.socket).read(buf) {
@@ -74,7 +74,7 @@ impl AsyncWrite for EspTcpStream {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-        buf: &[u8],
+        buf: &[u8]
     ) -> Poll<std::io::Result<usize>> {
         match (&mut self.socket).write(buf) {
             Ok(n) => Poll::Ready(Ok(n)),
@@ -86,10 +86,7 @@ impl AsyncWrite for EspTcpStream {
         }
     }
 
-    fn poll_flush(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         match (&mut self.socket).flush() {
             Ok(()) => Poll::Ready(Ok(())),
             Err(e) if is_would_block(&e) => {
@@ -100,10 +97,7 @@ impl AsyncWrite for EspTcpStream {
         }
     }
 
-    fn poll_close(
-        self: Pin<&mut Self>,
-        _cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
+    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
         Poll::Ready(self.socket.shutdown(std::net::Shutdown::Write))
     }
 }

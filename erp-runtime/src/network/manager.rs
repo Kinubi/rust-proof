@@ -126,33 +126,6 @@ impl NetworkManager {
             Err(e) => warn!(target: TAG, "failed to get sta_netif MAC: {:?}", e),
         }
 
-        // Test UDP unicast to gateway to check if basic outbound works
-        info!(target: TAG, "testing UDP unicast to gateway...");
-        match std::net::UdpSocket::bind("0.0.0.0:0") {
-            Ok(udp_sock) => {
-                let gateway_addr = format!("{}:53", ip_info.subnet.gateway);
-                match udp_sock.send_to(b"test", &gateway_addr) {
-                    Ok(sent) => info!(target: TAG, "UDP send to gateway succeeded ({sent} bytes)"),
-                    Err(e) => warn!(target: TAG, "UDP send to gateway failed: {:?}", e),
-                }
-            }
-            Err(e) => warn!(target: TAG, "UDP socket bind failed: {:?}", e),
-        }
-
-        // Test TCP connect to gateway port 80 (router usually has web interface)
-        info!(target: TAG, "testing TCP connect to gateway:80...");
-        let gateway_tcp = format!("{}:80", ip_info.subnet.gateway);
-        match
-            std::net::TcpStream::connect_timeout(
-                &gateway_tcp.parse().unwrap(),
-                std::time::Duration::from_secs(3)
-            )
-        {
-            Ok(_) => info!(target: TAG, "TCP connect to gateway:80 succeeded!"),
-            Err(e) =>
-                warn!(target: TAG, "TCP connect to gateway:80 failed: {:?} (os_error={:?})", e.kind(), e.raw_os_error()),
-        }
-
         let sockets = EspSocketFactory::new(local_addr.into());
         let mut listener = sockets.bind(self.config.listen_port).await?;
         let (session_event_tx, mut session_event_rx) = futures::channel::mpsc::unbounded();

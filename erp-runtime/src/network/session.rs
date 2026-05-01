@@ -280,7 +280,11 @@ async fn complete_outbound_handshake<S>(
 ) -> Result<VerifiedPeer, RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
-    let identify = request_identify(muxer, config, authenticated_transport_peer).await?;
+    // libp2p identify is push-based: the listener pushes identify to the dialer.
+    // So we need to accept an incoming substream from the peer for identify.
+    info!(target: TAG, "waiting for identify push from remote");
+    let identify = receive_identify_push(muxer, config, authenticated_transport_peer).await?;
+    info!(target: TAG, "received identify from remote: peer_id={:?}", identify.transport_peer_id);
     if identify.transport_peer_id.as_slice() != authenticated_transport_peer {
         return Err(
             RuntimeError::config(
@@ -345,6 +349,34 @@ async fn complete_inbound_handshake<S>(
     }
 
     verified_peer.ok_or_else(|| RuntimeError::config("node hello handshake did not complete"))
+}
+
+/// Receive identify info pushed by the remote peer (libp2p identify push model).
+/// The listener opens a substream and sends identify info to the dialer.
+async fn receive_identify_push<S>(
+    muxer: &mut YamuxMuxer<S>,
+    config: &NetworkConfig,
+    authenticated_transport_peer: &[u8]
+) -> Result<IdentifyInfo, RuntimeError>
+    where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
+{
+    let Some(mut substream) = muxer.accept_substream().await? else {
+        return Err(RuntimeError::config("remote closed the connection before sending identify"));
+    };
+
+    // Remote is dialing identify protocol on this substream
+    listener_select(&mut substream, &[IDENTIFY_PROTOCOL]).await?;
+
+    let frame = read_length_prefixed_frame(&mut substream, config.max_frame_len).await?;
+    let identify = decode_identify(&frame)?;
+    if identify.transport_peer_id.as_slice() != authenticated_transport_peer {
+        return Err(
+            RuntimeError::config(
+                "identify transport peer id did not match the authenticated transport session"
+            )
+        );
+    }
+    Ok(identify)
 }
 
 async fn request_identify<S>(
