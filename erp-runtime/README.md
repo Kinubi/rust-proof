@@ -38,16 +38,26 @@ Those belong in `rp-core` and `rp-node`.
 
 ## Current state
 
-Today this crate is still in embedded bring-up mode.
+This crate has moved past pure embedded bring-up and now contains the first real runtime-host slice around `rp-node`.
 
-It currently focuses on:
+Current implemented pieces include:
+
+- runtime bootstrap that constructs `NodeEngine`
+- runtime event loop and `NodeAction` dispatch
+- NVS-backed snapshot and block persistence
+- wake scheduling, including a test-only startup heartbeat
+- runtime identity and signing integration
+
+It still includes bring-up-oriented behavior in a few places, especially transport. The major incomplete area is still the embedded network adapter.
+
+It currently also focuses on:
 
 - ESP32-P4 host firmware in Rust
 - ESP-Hosted integration for Wi-Fi via an ESP32-C6 co-processor
 - async Wi-Fi connection flow using `AsyncWifi`
 - embedded task and timing experiments
 
-That means the crate is still a runtime prototype, not yet the finished embedded node runtime.
+That means the crate is now an in-progress embedded runtime host, but not yet the finished embedded node runtime.
 
 ## Hardware direction
 
@@ -84,6 +94,18 @@ Recommended security model:
 The embedded target configuration for this crate is still target-specific and separate from normal host workflows.
 
 Build from inside this directory with your Wi-Fi credentials when needed.
+
+Optional static bootstrap peers are also configured at build time.
+
+Use `BOOTSTRAP_PEERS` with comma-separated multiaddrs:
+
+```sh
+BOOTSTRAP_PEERS=/ip4/192.168.1.10/tcp/4001
+BOOTSTRAP_PEERS=/dns4/bootstrap.example.com/tcp/4001@12D3KooW...
+```
+
+Supported address formats are `/ip4/.../tcp/...` and `/dns4/.../tcp/...`.
+Appending `@<libp2p-peer-id>` pins the expected remote transport identity for that bootstrap entry.
 
 `esp-idf-sys` is configured to treat `erp-runtime/` as its local workspace for ESP-IDF assets. That keeps ESP downloads and generated files under this crate, primarily in `erp-runtime/.embuild/`, instead of the repository root.
 

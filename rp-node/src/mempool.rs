@@ -60,19 +60,19 @@ impl Mempool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
+    use rp_core::crypto::{ Signer, SigningKey };
     use rp_core::models::transaction::TransactionData;
 
     fn create_tx_with_fee(fee: u64, sequence: u64) -> Transaction {
         let mut csprng = OsRng;
-        let sender_keypair = SigningKey::generate(&mut csprng);
-        let receiver_keypair = SigningKey::generate(&mut csprng);
+        let sender_keypair = SigningKey::random(&mut csprng);
+        let receiver_keypair = SigningKey::random(&mut csprng);
 
         let mut tx = Transaction {
-            sender: sender_keypair.verifying_key(),
+            sender: sender_keypair.verifying_key().clone(),
             data: TransactionData::Transfer {
-                receiver: receiver_keypair.verifying_key(),
+                receiver: receiver_keypair.verifying_key().clone(),
                 amount: 10,
             },
             sequence,

@@ -22,6 +22,22 @@ esp-idf-hal = "0.46.2"
 anyhow = "1.0.102"
 fugit = "0.3.9"
 futures = "0.3.32"
+edge-executor = "0.4.1"
+embedded-svc = "0.29.0"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1", features = ["derive"] }
+libp2p-identity = { version = "0.2.13", default-features = false, features = ["ecdsa", "peerid", "rand"] }
+rp-core = { path = "../rp-core" }
+rp-node = { path = "../rp-node" }
+rand = "0.10.1"
+sha2 = "0.11.0"
+socket2 = "0.5"
+unsigned-varint = "0.8"
+quick-protobuf = "0.8.1"
+multiaddr = "0.18.2"
+snow = { version = "0.9.6", default-features = false, features = ["default-resolver"] }
+yamux = "0.13.10"
+
 
 [build-dependencies]
 embuild = "0.33"

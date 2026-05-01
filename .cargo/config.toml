@@ -1,3 +1,4 @@
 [alias]
 # Use --manifest-path to find the independent project
 run-esp = "run --manifest-path erp-runtime/Cargo.toml --config erp-runtime/.cargo/config.toml"
+build-esp = "build --manifest-path erp-runtime/Cargo.toml --config erp-runtime/.cargo/config.toml"

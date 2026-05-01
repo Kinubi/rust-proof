@@ -3,6 +3,7 @@ use crate::errors::NodeError;
 use rp_core::models::block::{ Block, BlockNode };
 use rp_core::models::transaction::Transaction;
 use rp_core::state::State;
+use rp_core::crypto::genesis_verifying_key;
 use rp_core::blockchain::{ validate_and_apply_block, should_replace_head };
 use rp_core::traits::{ Hashable };
 use alloc::vec::Vec;
@@ -31,9 +32,7 @@ impl Blockchain {
             height: 0,
             slot: 0,
             previous_hash: [0u8; 32],
-            validator: ed25519_dalek::VerifyingKey::from_bytes(&[0u8; 32]).map_err(|_| {
-                return NodeError::BlockError(rp_core::errors::BlockError::InvalidValidator);
-            })?,
+            validator: genesis_verifying_key(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -57,6 +56,32 @@ impl Blockchain {
         &self.chain
             .get(&self.head_hash)
             .expect("Blockchain should always have at least the genesis block").block
+    }
+
+    pub fn restore_head(&mut self, block: Block, state: State) {
+        let block_hash = block.hash();
+        self.chain.clear();
+        self.chain.insert(block_hash, BlockNode { block, children: vec![] });
+        self.head_hash = block_hash;
+        self.state = state;
+        self.mempool = Mempool::new(10000);
+    }
+
+    pub fn earliest_contiguous_height(&self) -> u64 {
+        let mut current_hash = self.head_hash;
+        let mut earliest_height = self.get_latest_block().height;
+
+        while let Some(node) = self.chain.get(&current_hash) {
+            earliest_height = node.block.height;
+
+            if node.block.height == 0 || !self.chain.contains_key(&node.block.previous_hash) {
+                break;
+            }
+
+            current_hash = node.block.previous_hash;
+        }
+
+        earliest_height
     }
 
     pub fn add_transaction(&mut self, tx: Transaction) -> Result<bool, &'static str> {
@@ -118,6 +143,16 @@ impl Blockchain {
     }
 
     pub fn get_blocks(&self, from_height: u64, to_height: u64) -> Vec<Block> {
+        if from_height > to_height {
+            return Vec::new();
+        }
+
+        let earliest_contiguous_height = self.earliest_contiguous_height();
+        let latest_height = self.get_latest_block().height;
+        if from_height < earliest_contiguous_height || from_height > latest_height {
+            return Vec::new();
+        }
+
         let mut blocks = Vec::new();
         let mut current_hash = self.head_hash;
 
@@ -125,11 +160,14 @@ impl Blockchain {
             if node.block.height >= from_height && node.block.height <= to_height {
                 blocks.push(node.block.clone());
             }
-            if node.block.height == 0 {
+
+            if node.block.height == earliest_contiguous_height || node.block.height == 0 {
                 break;
             }
+
             current_hash = node.block.previous_hash;
         }
+
         blocks.reverse();
         blocks
     }
@@ -138,24 +176,27 @@ impl Blockchain {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
+    use rp_core::crypto::{ Signer, SigningKey, verifying_key_to_bytes };
     use rp_core::models::transaction::TransactionData;
 
     #[test]
     fn test_blockchain_add_transaction_and_block() {
         let mut csprng = OsRng;
-        let validator_keypair = SigningKey::generate(&mut csprng);
-        let sender_keypair = SigningKey::generate(&mut csprng);
-        let receiver_keypair = SigningKey::generate(&mut csprng);
+        let validator_keypair = SigningKey::random(&mut csprng);
+        let sender_keypair = SigningKey::random(&mut csprng);
+        let receiver_keypair = SigningKey::random(&mut csprng);
 
         let mut blockchain = Blockchain::new().unwrap();
-        blockchain.state.balances.insert(*sender_keypair.verifying_key().as_bytes(), 100);
+        blockchain.state.balances.insert(
+            verifying_key_to_bytes(sender_keypair.verifying_key()),
+            100
+        );
 
         let mut tx = Transaction {
-            sender: sender_keypair.verifying_key(),
+            sender: sender_keypair.verifying_key().clone(),
             data: TransactionData::Transfer {
-                receiver: receiver_keypair.verifying_key(),
+                receiver: receiver_keypair.verifying_key().clone(),
                 amount: 50,
             },
             sequence: 0,
@@ -177,7 +218,7 @@ mod tests {
             height: latest_block.height + 1,
             slot: 1,
             previous_hash: latest_block.hash(),
-            validator: validator_keypair.verifying_key(),
+            validator: validator_keypair.verifying_key().clone(),
             transactions: vec![tx],
             signature: None,
             slash_proofs: vec![],
@@ -191,22 +232,22 @@ mod tests {
         assert!(res.is_ok(), "Failed to add block: {:?}", res.err());
         assert_eq!(blockchain.chain.len(), 2);
         assert_eq!(blockchain.mempool.len(), 0);
-        assert_eq!(blockchain.state.get_balance(&sender_keypair.verifying_key()), 50);
+        assert_eq!(blockchain.state.get_balance(sender_keypair.verifying_key()), 50);
     }
 
     #[test]
     fn test_enforce_consensus_validator() {
         let mut csprng = OsRng;
-        let validator1 = SigningKey::generate(&mut csprng);
-        let validator2 = SigningKey::generate(&mut csprng);
+        let validator1 = SigningKey::random(&mut csprng);
+        let validator2 = SigningKey::random(&mut csprng);
 
         let mut blockchain = Blockchain::new().unwrap();
-        blockchain.state.stakes.insert(validator1.verifying_key().to_bytes(), 100);
-        blockchain.state.stakes.insert(validator2.verifying_key().to_bytes(), 200);
+        blockchain.state.stakes.insert(verifying_key_to_bytes(validator1.verifying_key()), 100);
+        blockchain.state.stakes.insert(verifying_key_to_bytes(validator2.verifying_key()), 200);
         let parent_state = blockchain.state.clone();
         let expected_validator = blockchain.state.get_expected_validator(1).unwrap();
 
-        let wrong_validator = if expected_validator == validator1.verifying_key() {
+        let wrong_validator = if expected_validator == validator1.verifying_key().clone() {
             &validator2
         } else {
             &validator1
@@ -220,7 +261,7 @@ mod tests {
             height: latest_height + 1,
             slot: 1,
             previous_hash: latest_hash,
-            validator: wrong_validator.verifying_key(),
+            validator: wrong_validator.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -232,7 +273,7 @@ mod tests {
         let result = blockchain.add_block(bad_block, &parent_state);
         assert!(result.is_err());
 
-        let correct_validator = if expected_validator == validator1.verifying_key() {
+        let correct_validator = if expected_validator == validator1.verifying_key().clone() {
             &validator1
         } else {
             &validator2
@@ -242,7 +283,7 @@ mod tests {
             height: latest_height + 1,
             slot: 1,
             previous_hash: latest_hash,
-            validator: correct_validator.verifying_key(),
+            validator: correct_validator.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -257,8 +298,8 @@ mod tests {
     #[test]
     fn test_higher_slot_wins_same_height_fork() {
         let mut csprng = OsRng;
-        let validator1 = SigningKey::generate(&mut csprng);
-        let validator2 = SigningKey::generate(&mut csprng);
+        let validator1 = SigningKey::random(&mut csprng);
+        let validator2 = SigningKey::random(&mut csprng);
 
         let mut blockchain = Blockchain::new().unwrap();
         let parent = blockchain.get_latest_block().clone();
@@ -269,7 +310,7 @@ mod tests {
             height: 1,
             slot: 1,
             previous_hash: parent.hash(),
-            validator: validator1.verifying_key(),
+            validator: validator1.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -282,7 +323,7 @@ mod tests {
             height: 1,
             slot: 2,
             previous_hash: parent.hash(),
-            validator: validator2.verifying_key(),
+            validator: validator2.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -297,5 +338,30 @@ mod tests {
         assert!(blockchain.add_block(block_b, &parent_state).is_ok());
         assert_eq!(blockchain.head_hash, block_b_hash);
         assert_eq!(blockchain.get_latest_block().slot, 2);
+    }
+
+    #[test]
+    fn test_sparse_restore_only_serves_contiguous_available_history() {
+        let mut blockchain = Blockchain::new().unwrap();
+        let restored_state = State::new();
+        let restored_head = Block {
+            height: 5,
+            slot: 5,
+            previous_hash: [9u8; 32],
+            validator: genesis_verifying_key(),
+            transactions: vec![],
+            signature: None,
+            slash_proofs: vec![],
+            state_root: restored_state.compute_state_root(),
+        };
+
+        blockchain.restore_head(restored_head.clone(), restored_state);
+
+        assert_eq!(blockchain.earliest_contiguous_height(), 5);
+        assert!(blockchain.get_blocks(1, 5).is_empty());
+
+        let served_blocks = blockchain.get_blocks(5, 5);
+        assert_eq!(served_blocks.len(), 1);
+        assert_eq!(served_blocks[0].hash(), restored_head.hash());
     }
 }

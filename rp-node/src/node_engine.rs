@@ -2,12 +2,12 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 use rp_core::models::block::Block;
-use rp_core::models::transaction::{ Transaction, TransactionData };
+use rp_core::models::transaction::{ Transaction };
 use rp_core::state::State;
 use rp_core::traits::{ FromBytes, Hashable, ToBytes };
 
 use crate::contract::BlockHash;
-use crate::network::message::{ NetworkMessage, SyncResponse };
+use crate::network::message::{ AnnounceKind, AnnounceRequest, NetworkMessage, SyncResponse };
 use crate::{ blockchain::Blockchain, contract::{ NodeAction, NodeInput, PeerId } };
 
 const REQUEST_TIMEOUT_MS: u64 = 30_000;
@@ -50,12 +50,47 @@ impl NodeEngine {
         }
     }
 
+    pub fn restore_latest_snapshot(
+        &mut self,
+        block: Option<Block>,
+        state_bytes: Option<Vec<u8>>
+    ) -> Vec<NodeAction> {
+        let (Some(block), Some(state_bytes)) = (block, state_bytes) else {
+            return vec![NodeAction::ReportEvent {
+                message: "no snapshot restored",
+            }];
+        };
+
+        let restored_state = match State::from_bytes(&state_bytes) {
+            Ok(state) => state,
+            Err(_) => {
+                return vec![NodeAction::ReportEvent {
+                    message: "invalid startup snapshot bytes",
+                }];
+            }
+        };
+
+        if block.state_root != restored_state.compute_state_root() {
+            return vec![NodeAction::ReportEvent {
+                message: "startup snapshot state root mismatch",
+            }];
+        }
+
+        self.blockchain.restore_head(block, restored_state);
+
+        vec![NodeAction::ReportEvent {
+            message: "startup snapshot restored",
+        }]
+    }
+
     fn prune_expired_requests(&mut self, now_ms: u64) {
         self.pending_requests.retain(|request| request.deadline_ms > now_ms);
     }
 
     fn relay_transaction(&self, source_peer: PeerId, transaction: &Transaction) -> Vec<NodeAction> {
-        let frame = NetworkMessage::NewTransaction(transaction.clone()).to_bytes();
+        let frame = NetworkMessage::AnnounceRequest(
+            AnnounceRequest::transaction(transaction.clone())
+        ).to_bytes();
 
         self.peers
             .iter()
@@ -149,6 +184,9 @@ impl NodeEngine {
                 NodeAction::PersistSnapshot {
                     block_hash,
                     state_bytes: imported_block.next_state.to_bytes(),
+                },
+                NodeAction::ReportEvent {
+                    message: "Block added",
                 }
             ];
 
@@ -176,6 +214,7 @@ impl NodeEngine {
 
                 let mut actions = Vec::new();
                 actions.push(NodeAction::ScheduleWake { at_ms: now_ms + 1_000 });
+                actions.push(NodeAction::ReportEvent { message: "We have a tick" });
                 actions
             }
 
@@ -208,22 +247,39 @@ impl NodeEngine {
                 };
 
                 match message {
-                    NetworkMessage::NewBlock(block) => self.ingest_block(peer, block),
-                    NetworkMessage::NewTransaction(tx) => {
-                        match self.blockchain.add_transaction(tx.clone()) {
-                            Ok(true) => self.relay_transaction(peer, &tx),
-                            Ok(false) => Vec::new(),
-                            Err(error) => vec![NodeAction::ReportEvent { message: error }],
+                    NetworkMessage::AnnounceRequest(request) =>
+                        match request.kind {
+                            AnnounceKind::NewBlock(block) => self.ingest_block(peer, block),
+                            AnnounceKind::NewTransaction(tx) => {
+                                match self.blockchain.add_transaction(tx.clone()) {
+                                    Ok(true) => self.relay_transaction(peer, &tx),
+                                    Ok(false) => Vec::new(),
+                                    Err(error) => vec![NodeAction::ReportEvent { message: error }],
+                                }
+                            }
                         }
-                    }
                     NetworkMessage::SyncRequest(request) => {
                         let blocks = self.blockchain.get_blocks(
                             request.from_height,
                             request.to_height
                         );
+
+                        let highest_served_height = blocks.last().map(|block| block.height);
+                        let has_more = highest_served_height
+                            .map(|height| height < self.blockchain.get_latest_block().height)
+                            .unwrap_or(false);
+
                         vec![NodeAction::SendFrame {
                             peer,
-                            frame: NetworkMessage::SyncResponse(SyncResponse { blocks }).to_bytes(),
+                            frame: NetworkMessage::SyncResponse(SyncResponse {
+                                blocks,
+                                has_more,
+                                next_height: if has_more {
+                                    highest_served_height.map(|height| height.saturating_add(1))
+                                } else {
+                                    None
+                                },
+                            }).to_bytes(),
                         }]
                     }
                     NetworkMessage::SyncResponse(response) => {
@@ -241,6 +297,7 @@ impl NodeEngine {
                             actions
                         }
                     }
+                    NetworkMessage::AnnounceResponse(_) => vec![NodeAction::FrameReceived { peer }],
                 }
             }
 
@@ -248,7 +305,9 @@ impl NodeEngine {
                 match self.blockchain.add_transaction(transaction.clone()) {
                     Ok(true) =>
                         vec![NodeAction::BroadcastFrame {
-                            frame: NetworkMessage::NewTransaction(transaction).to_bytes(),
+                            frame: NetworkMessage::AnnounceRequest(
+                                AnnounceRequest::transaction(transaction)
+                            ).to_bytes(),
                         }],
                     Ok(false) => Vec::new(),
                     Err(_) =>
@@ -305,9 +364,9 @@ impl NodeEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ Signer, SigningKey };
     use rand::rngs::OsRng;
-    use rp_core::models::transaction::Transaction;
+    use rp_core::crypto::{ Signer, SigningKey, verifying_key_to_bytes };
+    use rp_core::models::transaction::{ Transaction, TransactionData };
     use rp_core::traits::{ Hashable, ToBytes };
 
     use crate::contract::{ NodeAction, NodeInput };
@@ -321,9 +380,9 @@ mod tests {
         sequence: u64
     ) -> Transaction {
         let mut transaction = Transaction {
-            sender: sender.verifying_key(),
+            sender: sender.verifying_key().clone(),
             data: TransactionData::Transfer {
-                receiver: receiver.verifying_key(),
+                receiver: receiver.verifying_key().clone(),
                 amount,
             },
             sequence,
@@ -345,7 +404,7 @@ mod tests {
             height: parent.height + 1,
             slot,
             previous_hash: parent.hash(),
-            validator: validator.verifying_key(),
+            validator: validator.verifying_key().clone(),
             transactions: vec![],
             signature: None,
             slash_proofs: vec![],
@@ -357,7 +416,7 @@ mod tests {
     }
 
     fn assert_persist_actions(actions: &[NodeAction], expected_hash: [u8; 32]) {
-        assert_eq!(actions.len(), 2);
+        assert!(actions.len() >= 2);
 
         match &actions[0] {
             NodeAction::PersistBlock { block } => {
@@ -376,8 +435,8 @@ mod tests {
 
     fn setup_forked_engine() -> (NodeEngine, PeerId, Block, Vec<u8>) {
         let mut csprng = OsRng;
-        let validator_a = SigningKey::generate(&mut csprng);
-        let validator_b = SigningKey::generate(&mut csprng);
+        let validator_a = SigningKey::random(&mut csprng);
+        let validator_b = SigningKey::random(&mut csprng);
         let peer = [7u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
@@ -387,14 +446,16 @@ mod tests {
         let block_a = build_empty_block(&genesis, &engine.blockchain.state, &validator_a, 1);
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(block_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(block_a.clone())
+            ).to_bytes(),
         });
         assert_persist_actions(&actions, block_a.hash());
 
         let block_b = build_empty_block(&genesis, &engine.blockchain.state, &validator_b, 2);
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(block_b).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(AnnounceRequest::block(block_b)).to_bytes(),
         });
         assert_eq!(actions.len(), 1);
         match &actions[0] {
@@ -417,7 +478,7 @@ mod tests {
     #[test]
     fn test_frame_received_direct_child_persists_block_and_snapshot() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let peer = [1u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
@@ -426,7 +487,9 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(block.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(block.clone())
+            ).to_bytes(),
         });
 
         assert_eq!(engine.blockchain.head_hash, block.hash());
@@ -437,7 +500,7 @@ mod tests {
     #[test]
     fn test_frame_received_non_head_child_emits_load_snapshot() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
         let child_of_a = build_empty_block(
             &block_a,
@@ -448,7 +511,9 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_of_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_of_a.clone())
+            ).to_bytes(),
         });
 
         assert_eq!(actions.len(), 1);
@@ -464,7 +529,7 @@ mod tests {
     #[test]
     fn test_storage_loaded_imports_parked_block_and_persists_it() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
         let child_of_a = build_empty_block(
             &block_a,
@@ -475,7 +540,9 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_of_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_of_a.clone())
+            ).to_bytes(),
         });
         assert!(matches!(&actions[0], NodeAction::LoadSnapshot { .. }));
 
@@ -492,7 +559,7 @@ mod tests {
     #[test]
     fn test_storage_loaded_none_requests_parent_block() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
         let child_of_a = build_empty_block(
             &block_a,
@@ -503,7 +570,7 @@ mod tests {
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_of_a).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(AnnounceRequest::block(child_of_a)).to_bytes(),
         });
         assert!(matches!(&actions[0], NodeAction::LoadSnapshot { .. }));
 
@@ -532,25 +599,34 @@ mod tests {
     #[test]
     fn test_sync_response_uses_ingest_path_and_clears_pending_request() {
         let mut csprng = OsRng;
-        let validator = SigningKey::generate(&mut csprng);
+        let validator = SigningKey::random(&mut csprng);
         let peer = [3u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
         let genesis = engine.blockchain.get_latest_block().clone();
         let block = build_empty_block(&genesis, &engine.blockchain.state, &validator, 1);
 
+        let to_height = 1;
+
         let request_actions = engine.step(NodeInput::ImportRequested {
             peer,
             from_height: 1,
-            to_height: 1,
+            to_height,
         });
         assert_eq!(engine.pending_requests.len(), 1);
         assert!(matches!(&request_actions[0], NodeAction::RequestBlocks { .. }));
+        let has_more = 1 < engine.blockchain.get_latest_block().height;
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer,
             frame: NetworkMessage::SyncResponse(SyncResponse {
                 blocks: vec![block.clone()],
+                has_more,
+                next_height: if has_more {
+                    Some(to_height.saturating_add(1))
+                } else {
+                    None
+                },
             }).to_bytes(),
         });
 
@@ -560,22 +636,66 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_request_after_sparse_restore_does_not_advertise_missing_history() {
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        let peer = [4u8; 32];
+        let restored_state = State::new();
+        let restored_head = Block {
+            height: 5,
+            slot: 5,
+            previous_hash: [7u8; 32],
+            validator: rp_core::crypto::genesis_verifying_key(),
+            transactions: vec![],
+            signature: None,
+            slash_proofs: vec![],
+            state_root: restored_state.compute_state_root(),
+        };
+
+        engine.blockchain.restore_head(restored_head, restored_state);
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::SyncRequest(crate::network::message::SyncRequest {
+                from_height: 1,
+                to_height: 5,
+            }).to_bytes(),
+        });
+
+        let NodeAction::SendFrame { frame, .. } = &actions[0] else {
+            panic!("expected SendFrame action");
+        };
+        let NetworkMessage::SyncResponse(response) =
+            NetworkMessage::from_bytes(frame).unwrap() else {
+            panic!("expected SyncResponse frame");
+        };
+
+        assert!(response.blocks.is_empty());
+        assert!(!response.has_more);
+        assert_eq!(response.next_height, None);
+    }
+
+    #[test]
     fn test_peer_transaction_relays_to_other_connected_peers() {
         let mut csprng = OsRng;
-        let sender = SigningKey::generate(&mut csprng);
-        let receiver = SigningKey::generate(&mut csprng);
+        let sender = SigningKey::random(&mut csprng);
+        let receiver = SigningKey::random(&mut csprng);
         let source_peer = [8u8; 32];
         let peer_a = [9u8; 32];
         let peer_b = [10u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
-        engine.blockchain.state.balances.insert(sender.verifying_key().to_bytes(), 100);
+        engine.blockchain.state.balances.insert(
+            verifying_key_to_bytes(sender.verifying_key()),
+            100
+        );
         engine.step(NodeInput::PeerConnected { peer: source_peer });
         engine.step(NodeInput::PeerConnected { peer: peer_a });
         engine.step(NodeInput::PeerConnected { peer: peer_b });
 
         let transaction = build_transfer_transaction(&sender, &receiver, 25, 1, 0);
-        let expected_frame = NetworkMessage::NewTransaction(transaction.clone()).to_bytes();
+        let expected_frame = NetworkMessage::AnnounceRequest(
+            AnnounceRequest::transaction(transaction.clone())
+        ).to_bytes();
 
         let actions = engine.step(NodeInput::FrameReceived {
             peer: source_peer,
@@ -602,18 +722,23 @@ mod tests {
     #[test]
     fn test_duplicate_peer_transaction_is_not_relayed() {
         let mut csprng = OsRng;
-        let sender = SigningKey::generate(&mut csprng);
-        let receiver = SigningKey::generate(&mut csprng);
+        let sender = SigningKey::random(&mut csprng);
+        let receiver = SigningKey::random(&mut csprng);
         let source_peer = [11u8; 32];
         let other_peer = [12u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
-        engine.blockchain.state.balances.insert(sender.verifying_key().to_bytes(), 100);
+        engine.blockchain.state.balances.insert(
+            verifying_key_to_bytes(sender.verifying_key()),
+            100
+        );
         engine.step(NodeInput::PeerConnected { peer: source_peer });
         engine.step(NodeInput::PeerConnected { peer: other_peer });
 
         let transaction = build_transfer_transaction(&sender, &receiver, 25, 1, 0);
-        let frame = NetworkMessage::NewTransaction(transaction).to_bytes();
+        let frame = NetworkMessage::AnnounceRequest(
+            AnnounceRequest::transaction(transaction)
+        ).to_bytes();
 
         let first_actions = engine.step(NodeInput::FrameReceived {
             peer: source_peer,
@@ -670,15 +795,17 @@ mod tests {
 
         let actions = engine.step(NodeInput::Tick { now_ms: 31_000 });
 
-        assert_eq!(actions.len(), 1);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], NodeAction::ScheduleWake { at_ms: 32_000 }));
+        assert!(matches!(actions[1], NodeAction::ReportEvent { message: "We have a tick" }));
         assert!(engine.pending_requests.is_empty());
     }
 
     #[test]
     fn test_storage_loaded_imports_multiple_parked_siblings() {
         let mut csprng = OsRng;
-        let validator_a = SigningKey::generate(&mut csprng);
-        let validator_b = SigningKey::generate(&mut csprng);
+        let validator_a = SigningKey::random(&mut csprng);
+        let validator_b = SigningKey::random(&mut csprng);
         let (mut engine, peer, block_a, parent_state_bytes) = setup_forked_engine();
 
         let child_a = build_empty_block(
@@ -696,11 +823,15 @@ mod tests {
 
         engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_a.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_a.clone())
+            ).to_bytes(),
         });
         engine.step(NodeInput::FrameReceived {
             peer,
-            frame: NetworkMessage::NewBlock(child_b.clone()).to_bytes(),
+            frame: NetworkMessage::AnnounceRequest(
+                AnnounceRequest::block(child_b.clone())
+            ).to_bytes(),
         });
 
         assert_eq!(engine.pending_blocks.get(&block_a.hash()).unwrap().len(), 2);

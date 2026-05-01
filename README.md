@@ -74,5 +74,6 @@ The workspace is still in a transitional state.
 
 - `rp-core/` and `rp-node/` now compile as shared-engine crates in `no_std + alloc` form
 - the shared engine path now owns the blockchain and node boundaries, while runtime adapters remain outside it
-- `rp-runtime/` and `erp-runtime/` still need their Phase 2 rewrites around the shared node contract
+- `rp-runtime/` still needs its Phase 2 rewrite around the shared node contract
+- `erp-runtime/` now has a first Phase 2 runtime-host slice in place, including node hosting, storage, wake, and identity adapters plus transport scaffolding
 - `erp-runtime/` keeps embedded target-specific configuration

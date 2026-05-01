@@ -1,5 +1,5 @@
 use crate::traits::{ Hashable, ToBytes };
-use ed25519_dalek::{ Signature, VerifyingKey };
+use crate::crypto::{ Signature, Verifier, VerifyingKey };
 use serde::{ Deserialize, Serialize };
 use crate::models::slashing::SlashProof;
 use alloc::vec::Vec;
@@ -9,6 +9,7 @@ use core::cmp::Ordering;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Transaction {
     /// The public key of the sender.
+    #[serde(with = "crate::crypto::serde_verifying_key")]
     pub sender: VerifyingKey,
     /// The public key of the receiver.
     pub data: TransactionData,
@@ -23,6 +24,7 @@ pub struct Transaction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransactionData {
     Transfer {
+        #[serde(with = "crate::crypto::serde_verifying_key")]
         receiver: VerifyingKey,
         amount: u64,
     },
@@ -77,7 +79,7 @@ impl Transaction {
     pub fn is_valid(&self) -> bool {
         if let Some(signature) = &self.signature {
             let hash = self.hash();
-            self.sender.verify_strict(&hash[..], signature).is_ok()
+            self.sender.verify(&hash[..], signature).is_ok()
         } else {
             return false;
         }
@@ -114,19 +116,19 @@ impl Ord for Transaction {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{ SigningKey, Signer };
+    use crate::crypto::{ Signer, SigningKey };
     use rand::rngs::OsRng;
 
     #[test]
     fn test_transaction_signing_and_verification() {
         let mut csprng = OsRng;
-        let sender_keypair = SigningKey::generate(&mut csprng);
-        let receiver_keypair = SigningKey::generate(&mut csprng);
+        let sender_keypair = SigningKey::random(&mut csprng);
+        let receiver_keypair = SigningKey::random(&mut csprng);
 
         let mut tx = Transaction {
-            sender: sender_keypair.verifying_key(),
+            sender: sender_keypair.verifying_key().clone(),
             data: TransactionData::Transfer {
-                receiver: receiver_keypair.verifying_key(),
+                receiver: receiver_keypair.verifying_key().clone(),
                 amount: 100,
             },
             sequence: 1,

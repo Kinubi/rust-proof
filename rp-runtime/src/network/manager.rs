@@ -10,7 +10,7 @@ use libp2p::{
     yamux,
     Swarm,
 };
-use rp_node::network::message::{ NetworkMessage, SyncRequest, SyncResponse };
+use rp_node::network::message::{ AnnounceKind, NetworkMessage, SyncRequest, SyncResponse };
 use rp_node::contract::NodeAction;
 use tokio::{ select, sync::mpsc };
 
@@ -113,12 +113,17 @@ impl NetworkManager {
                             if let Ok(network_message) = serde_json::from_slice::<NetworkMessage>(&message.data) {
                                 println!("Deserialized NetworkMessage: {:?}", network_message);
                                 match network_message {
-                                    NetworkMessage::NewTransaction(tx) => {
-                                        let _ = self.node_sender.send(NodeCommand::AddTransaction { transaction: tx, responder: tokio::sync::oneshot::channel().0 }).await;
+                                    NetworkMessage::AnnounceRequest(request) => {
+                                        match request.kind {
+                                            AnnounceKind::NewTransaction(tx) => {
+                                                let _ = self.node_sender.send(NodeCommand::AddTransaction { transaction: tx, responder: tokio::sync::oneshot::channel().0 }).await;
+                                            }
+                                            AnnounceKind::NewBlock(block) => {
+                                                let _ = self.node_sender.send(NodeCommand::AddBlock { block, responder: tokio::sync::oneshot::channel().0 }).await;
+                                            }
+                                        }
                                     }
-                                    NetworkMessage::NewBlock(block) => {
-                                        let _ = self.node_sender.send(NodeCommand::AddBlock { block, responder: tokio::sync::oneshot::channel().0 }).await;
-                                    }
+                                    _ => println!("Unexpected non-announce network message on gossipsub"),
                                 }
                             } else {
                                 println!("Failed to deserialize Gossipsub message");

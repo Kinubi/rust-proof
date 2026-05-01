@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-ed25519-dalek = { version = "2.2.0", features = ["rand_core", "serde"] }
+p256 = { version = "0.13.2", default-features = false, features = ["ecdsa", "sha256", "serde"] }
 rand = "0.8.5"
 sha2 = "0.10.9"
 serde = { version = "1.0.228", features = ["derive", "alloc"] }

@@ -3,7 +3,7 @@ use rp_core::models::transaction::Transaction;
 use alloc::vec::Vec;
 use crate::errors::ContractError;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PersistCompletedType {
     Snapshot,
     Block,
@@ -40,6 +40,7 @@ pub enum NodeInput {
     },
 }
 
+#[derive(Debug, Clone)]
 pub enum NodeAction {
     SendFrame {
         peer: PeerId,
