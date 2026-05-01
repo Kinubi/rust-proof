@@ -80,12 +80,20 @@ impl TransportIdentityManager {
 
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, RuntimeError> {
         match &self.backend {
-            TransportIdentityBackend::Software(keypair) => keypair
-                .sign(message)
-                .map_err(|_| RuntimeError::crypto("failed to sign message with transport identity")),
-            TransportIdentityBackend::Hardware(identity) => identity
-                .sign(message)
-                .map_err(|_| RuntimeError::crypto("failed to sign message with hardware transport identity")),
+            TransportIdentityBackend::Software(keypair) =>
+                keypair
+                    .sign(message)
+                    .map_err(|_|
+                        RuntimeError::crypto("failed to sign message with transport identity")
+                    ),
+            TransportIdentityBackend::Hardware(identity) =>
+                identity
+                    .sign(message)
+                    .map_err(|_|
+                        RuntimeError::crypto(
+                            "failed to sign message with hardware transport identity"
+                        )
+                    ),
         }
     }
 
@@ -107,7 +115,8 @@ impl TransportIdentityManager {
             return Ok(None);
         };
 
-        let record = postcard::from_bytes(bytes)
+        let record = postcard
+            ::from_bytes(bytes)
             .map_err(|_| RuntimeError::crypto("invalid persisted transport identity record"))?;
 
         Ok(Some(record))
@@ -117,7 +126,8 @@ impl TransportIdentityManager {
         storage: &mut EspKeyValueStorage<NvsDefault>,
         record: &TransportIdentityRecord
     ) -> Result<(), RuntimeError> {
-        let bytes = postcard::to_allocvec(record)
+        let bytes = postcard
+            ::to_allocvec(record)
             .map_err(|_| RuntimeError::crypto("failed to serialize transport identity record"))?;
 
         storage.set_raw(TRANSPORT_IDENTITY_KEY, &bytes)?;
@@ -125,12 +135,17 @@ impl TransportIdentityManager {
     }
 
     fn from_record(record: TransportIdentityRecord) -> Result<Self, RuntimeError> {
-        let keypair = Keypair::from_protobuf_encoding(&record.private_key_protobuf)
-            .map_err(|_| RuntimeError::crypto("failed to decode persisted transport identity keypair"))?;
+        let keypair = Keypair::from_protobuf_encoding(&record.private_key_protobuf).map_err(|_|
+            RuntimeError::crypto("failed to decode persisted transport identity keypair")
+        )?;
 
         let algorithm = Self::algorithm_from_key_type(keypair.key_type())?;
         if algorithm != record.algorithm {
-            return Err(RuntimeError::crypto("transport identity algorithm does not match persisted keypair"));
+            return Err(
+                RuntimeError::crypto(
+                    "transport identity algorithm does not match persisted keypair"
+                )
+            );
         }
 
         Self::from_keypair(keypair)
@@ -152,8 +167,13 @@ impl TransportIdentityManager {
 
     fn from_hardware_identity(identity: IdentityManager) -> Result<Self, RuntimeError> {
         let raw_public_key = identity.public_key();
-        let ecdsa_public_key = ecdsa::PublicKey::try_from_bytes(&raw_public_key)
-            .map_err(|_| RuntimeError::crypto("failed to convert hardware public key into libp2p ECDSA identity"))?;
+        let ecdsa_public_key = ecdsa::PublicKey
+            ::try_from_bytes(&raw_public_key)
+            .map_err(|_|
+                RuntimeError::crypto(
+                    "failed to convert hardware public key into libp2p ECDSA identity"
+                )
+            )?;
         let public_key = PublicKey::from(ecdsa_public_key);
         let public_key_protobuf_bytes = public_key.encode_protobuf();
         let peer_id_bytes = public_key.to_peer_id().to_bytes();
@@ -166,7 +186,9 @@ impl TransportIdentityManager {
         })
     }
 
-    fn algorithm_from_key_type(key_type: KeyType) -> Result<TransportIdentityAlgorithm, RuntimeError> {
+    fn algorithm_from_key_type(
+        key_type: KeyType
+    ) -> Result<TransportIdentityAlgorithm, RuntimeError> {
         match key_type {
             KeyType::Ecdsa => Ok(TransportIdentityAlgorithm::EcdsaP256),
             KeyType::Ed25519 => Ok(TransportIdentityAlgorithm::Ed25519),
