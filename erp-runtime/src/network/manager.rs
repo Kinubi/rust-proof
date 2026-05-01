@@ -1,21 +1,14 @@
-use std::{
-    collections::BTreeMap,
-    io::Error,
-    net::SocketAddr,
-    pin::Pin,
-    sync::Arc,
-    thread,
-};
+use std::{ collections::BTreeMap, io::Error, net::SocketAddr, pin::Pin, sync::Arc, thread };
 
 use embassy_time::{ Duration, Timer };
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::wifi::{ AsyncWifi, EspWifi };
 use futures::{ FutureExt, SinkExt, StreamExt, pin_mut, select };
+use multiaddr::{ Multiaddr, Protocol };
 use log::{ error, info, warn };
 use rp_core::traits::ToBytes;
-use rp_node::{
-    contract::PeerId,
-    network::message::{ NetworkMessage, SyncRequest },
-};
+use libp2p_identity::PeerId as Libp2pPeerId;
+use rp_node::{ contract::PeerId, network::message::{ NetworkMessage, SyncRequest } };
 
 use crate::{
     identity::manager::IdentityManager,
@@ -50,6 +43,7 @@ const DEFAULT_MAX_BLOCKS_PER_CHUNK: u16 = 32;
 const DEFAULT_IDLE_TIMEOUT_MS: u64 = 60_000;
 const BOOTSTRAP_RETRY_MS: u64 = 10_000;
 const SESSION_THREAD_STACK_SIZE: usize = 96 * 1024;
+const BOOTSTRAP_PEERS_ENV: Option<&str> = option_env!("BOOTSTRAP_PEERS");
 
 pub struct NetworkManager {
     network_rx: NetworkRx,
@@ -67,10 +61,11 @@ impl NetworkManager {
         network_rx: NetworkRx,
         event_tx: EventTx,
         identity: IdentityManager,
-        wifi: AsyncWifi<EspWifi<'static>>
+        wifi: AsyncWifi<EspWifi<'static>>,
+        nvs_partition: EspDefaultNvsPartition
     ) -> Result<Self, RuntimeError> {
-        let config = default_network_config();
-        let transport_identity = TransportIdentityManager::load_or_create()?;
+        let config = default_network_config()?;
+        let transport_identity = TransportIdentityManager::load_or_create(nvs_partition)?;
 
         Ok(Self {
             network_rx,
@@ -106,11 +101,15 @@ impl NetworkManager {
 
         self.ensure_wifi_connected().await?;
 
-        let sockets = EspSocketFactory::new(SocketAddr::from(([0, 0, 0, 0], self.config.listen_port)));
+        let sockets = EspSocketFactory::new(
+            SocketAddr::from(([0, 0, 0, 0], self.config.listen_port))
+        );
         let mut listener = sockets.bind(self.config.listen_port).await?;
         let (session_event_tx, mut session_event_rx) = futures::channel::mpsc::unbounded();
         let mut bootstrap_cursor = 0usize;
-        let mut bootstrap_timer: Pin<Box<_>> = Box::pin(Timer::after(Duration::from_millis(0)).fuse());
+        let mut bootstrap_timer: Pin<Box<_>> = Box::pin(
+            Timer::after(Duration::from_millis(0)).fuse()
+        );
 
         loop {
             let next_accept = sockets.accept(&mut listener).fuse();
@@ -157,7 +156,10 @@ impl NetworkManager {
         Ok(())
     }
 
-    async fn handle_network_command(&mut self, command: NetworkCommand) -> Result<(), RuntimeError> {
+    async fn handle_network_command(
+        &mut self,
+        command: NetworkCommand
+    ) -> Result<(), RuntimeError> {
         match command {
             NetworkCommand::SendFrame { peer, frame } => self.send_frame_to_peer(peer, frame).await,
             NetworkCommand::BroadcastFrame { frame } => {
@@ -181,7 +183,11 @@ impl NetworkManager {
         }
     }
 
-    async fn send_frame_to_peer(&mut self, peer: PeerId, frame: Vec<u8>) -> Result<(), RuntimeError> {
+    async fn send_frame_to_peer(
+        &mut self,
+        peer: PeerId,
+        frame: Vec<u8>
+    ) -> Result<(), RuntimeError> {
         let Some(session_id) = self.peers.session_for_node(&peer) else {
             warn!(target: TAG, "dropping outbound frame for unknown peer {:?}", peer);
             return Ok(());
@@ -192,9 +198,7 @@ impl NetworkManager {
             return Ok(());
         };
 
-        command_tx
-            .send(SessionCommand::SendFrame(frame)).await
-            .map_err(RuntimeError::network_send)
+        command_tx.send(SessionCommand::SendFrame(frame)).await.map_err(RuntimeError::network_send)
     }
 
     async fn disconnect_peer(&mut self, peer: PeerId) -> Result<(), RuntimeError> {
@@ -205,18 +209,17 @@ impl NetworkManager {
             return Ok(());
         };
 
-        command_tx
-            .send(SessionCommand::Disconnect).await
-            .map_err(RuntimeError::network_send)
+        command_tx.send(SessionCommand::Disconnect).await.map_err(RuntimeError::network_send)
     }
 
     async fn handle_session_event(&mut self, event: SessionEvent) -> Result<(), RuntimeError> {
         match event {
             SessionEvent::Ready { session_id, verified_peer } => {
-                let session = self
-                    .peers
+                let session = self.peers
                     .get_mut(session_id)
-                    .ok_or_else(|| RuntimeError::config("session ready event referenced an unknown session"))?;
+                    .ok_or_else(||
+                        RuntimeError::config("session ready event referenced an unknown session")
+                    )?;
                 session.transport_peer_id = verified_peer.transport_peer_id.clone();
                 session.max_frame_len = verified_peer.max_frame_len;
                 session.max_blocks_per_chunk = verified_peer.max_blocks_per_chunk;
@@ -248,7 +251,7 @@ impl NetworkManager {
         &mut self,
         sockets: &EspSocketFactory,
         session_event_tx: &SessionEventTx,
-        bootstrap_cursor: &mut usize,
+        bootstrap_cursor: &mut usize
     ) -> Result<(), RuntimeError> {
         if self.peers.ready_sessions().len() >= self.config.max_outbound_dials {
             return Ok(());
@@ -276,7 +279,7 @@ impl NetworkManager {
                     stream,
                     ConnectionRole::Outbound,
                     session_event_tx,
-                    target.expected_transport_peer.clone(),
+                    target.expected_transport_peer.clone()
                 )?;
             }
             Err(error) => {
@@ -292,7 +295,7 @@ impl NetworkManager {
         stream: crate::network::socket::esp_idf::EspTcpStream,
         role: ConnectionRole,
         session_event_tx: &SessionEventTx,
-        expected_transport_peer: Option<Vec<u8>>,
+        expected_transport_peer: Option<Vec<u8>>
     ) -> Result<(), RuntimeError> {
         let session_id = self.peers.alloc(Vec::new())?;
         let (command_tx, command_rx) = session_command_channel();
@@ -325,14 +328,74 @@ impl NetworkManager {
     }
 }
 
-fn default_network_config() -> NetworkConfig {
-    NetworkConfig {
+fn default_network_config() -> Result<NetworkConfig, RuntimeError> {
+    Ok(NetworkConfig {
         listen_port: DEFAULT_LISTEN_PORT,
         max_peers: DEFAULT_MAX_PEERS,
         max_outbound_dials: DEFAULT_MAX_OUTBOUND_DIALS,
         max_frame_len: DEFAULT_MAX_FRAME_LEN,
         max_blocks_per_chunk: DEFAULT_MAX_BLOCKS_PER_CHUNK,
         idle_timeout_ms: DEFAULT_IDLE_TIMEOUT_MS,
-        bootstrap_peers: Vec::new(),
+        bootstrap_peers: parse_bootstrap_peers(BOOTSTRAP_PEERS_ENV)?,
+    })
+}
+
+fn parse_bootstrap_peers(
+    input: Option<&str>
+) -> Result<Vec<crate::network::config::BootstrapPeer>, RuntimeError> {
+    let Some(input) = input.map(str::trim).filter(|input| !input.is_empty()) else {
+        return Ok(Vec::new());
+    };
+
+    input
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(parse_bootstrap_peer)
+        .collect()
+}
+
+fn parse_bootstrap_peer(
+    entry: &str
+) -> Result<crate::network::config::BootstrapPeer, RuntimeError> {
+    let (address, expected_transport_peer) = match entry.split_once('@') {
+        Some((address, peer_id)) => (address, Some(parse_transport_peer_id(peer_id.trim())?)),
+        None => (entry, None),
+    };
+
+    Ok(crate::network::config::BootstrapPeer {
+        address: parse_bootstrap_address(address.trim())?,
+        expected_transport_peer,
+    })
+}
+
+fn parse_bootstrap_address(
+    value: &str
+) -> Result<crate::network::config::MultiaddrLite, RuntimeError> {
+    let multiaddr = value
+        .parse::<Multiaddr>()
+        .map_err(|_| RuntimeError::config("BOOTSTRAP_PEERS contains an invalid multiaddr"))?;
+    let mut protocols = multiaddr.iter();
+
+    match (protocols.next(), protocols.next(), protocols.next()) {
+        (Some(Protocol::Ip4(addr)), Some(Protocol::Tcp(port)), None) => {
+            Ok(crate::network::config::MultiaddrLite::Ip4Tcp { addr: addr.octets(), port })
+        }
+        (Some(Protocol::Dns4(host)), Some(Protocol::Tcp(port)), None) => {
+            Ok(crate::network::config::MultiaddrLite::Dns4Tcp { host: host.into_owned(), port })
+        }
+        _ =>
+            Err(
+                RuntimeError::config(
+                    "BOOTSTRAP_PEERS only supports /ip4/.../tcp/... and /dns4/.../tcp/... entries"
+                )
+            ),
     }
+}
+
+fn parse_transport_peer_id(value: &str) -> Result<Vec<u8>, RuntimeError> {
+    value
+        .parse::<Libp2pPeerId>()
+        .map(|peer_id| peer_id.to_bytes())
+        .map_err(|_| RuntimeError::config("BOOTSTRAP_PEERS contains an invalid libp2p peer id"))
 }

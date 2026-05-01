@@ -2,7 +2,7 @@ use core::fmt::Write;
 
 use embedded_svc::storage::RawStorage;
 use esp_idf_hal::sys::EspError;
-use esp_idf_svc::nvs::{ EspKeyValueStorage, EspNvs, EspNvsPartition, NvsDefault };
+use esp_idf_svc::nvs::{ EspDefaultNvsPartition, EspKeyValueStorage, EspNvs, NvsDefault };
 use log::warn;
 use rp_core::{ models::block::Block, traits::Hashable };
 use rp_node::{ contract::{ BlockHash, Storage }, errors::ContractError };
@@ -20,8 +20,7 @@ const LATEST_SNAPSHOT_KEY: &str = "latest_snap";
 const TAG: &str = "storage";
 
 impl NvsStorage {
-    pub fn new() -> Result<Self, EspError> {
-        let nvs_partition = EspNvsPartition::<NvsDefault>::take()?;
+    pub fn new(nvs_partition: EspDefaultNvsPartition) -> Result<Self, EspError> {
         let nvs = EspNvs::new(nvs_partition, NVS_NAMESPACE, true)?;
         let nvs_kv_storage = EspKeyValueStorage::new(nvs);
 

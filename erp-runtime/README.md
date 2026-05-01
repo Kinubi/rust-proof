@@ -95,6 +95,18 @@ The embedded target configuration for this crate is still target-specific and se
 
 Build from inside this directory with your Wi-Fi credentials when needed.
 
+Optional static bootstrap peers are also configured at build time.
+
+Use `BOOTSTRAP_PEERS` with comma-separated multiaddrs:
+
+```sh
+BOOTSTRAP_PEERS=/ip4/192.168.1.10/tcp/4001
+BOOTSTRAP_PEERS=/dns4/bootstrap.example.com/tcp/4001@12D3KooW...
+```
+
+Supported address formats are `/ip4/.../tcp/...` and `/dns4/.../tcp/...`.
+Appending `@<libp2p-peer-id>` pins the expected remote transport identity for that bootstrap entry.
+
 `esp-idf-sys` is configured to treat `erp-runtime/` as its local workspace for ESP-IDF assets. That keeps ESP downloads and generated files under this crate, primarily in `erp-runtime/.embuild/`, instead of the repository root.
 
 The root `Cargo.toml` is still required because this repository is a Cargo workspace. It is the workspace manifest, not a duplicate package manifest for `erp-runtime`.

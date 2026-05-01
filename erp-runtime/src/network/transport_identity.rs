@@ -1,5 +1,5 @@
 use embedded_svc::storage::RawStorage;
-use esp_idf_svc::nvs::{ EspKeyValueStorage, EspNvs, EspNvsPartition, NvsDefault };
+use esp_idf_svc::nvs::{ EspDefaultNvsPartition, EspKeyValueStorage, EspNvs, NvsDefault };
 use libp2p_identity::{ KeyType, Keypair, PublicKey, ecdsa };
 use log::info;
 use rp_core::crypto::Signature as P256Signature;
@@ -45,13 +45,13 @@ pub struct TransportIdentityManager {
 }
 
 impl TransportIdentityManager {
-    pub fn load_or_create() -> Result<Self, RuntimeError> {
+    pub fn load_or_create(nvs_partition: EspDefaultNvsPartition) -> Result<Self, RuntimeError> {
         if let Some(identity) = IdentityManager::try_efuse()? {
             info!(target: TAG, "using efuse-backed runtime identity for libp2p transport authentication");
             return Self::from_hardware_identity(identity);
         }
 
-        let mut storage = Self::open_storage()?;
+        let mut storage = Self::open_storage(nvs_partition)?;
 
         if let Some(record) = Self::load_record(&storage)? {
             return Self::from_record(record);
@@ -107,9 +107,10 @@ impl TransportIdentityManager {
         }
     }
 
-    fn open_storage() -> Result<EspKeyValueStorage<NvsDefault>, RuntimeError> {
-        let partition = EspNvsPartition::<NvsDefault>::take()?;
-        let nvs = EspNvs::new(partition, NVS_NAMESPACE, true)?;
+    fn open_storage(
+        nvs_partition: EspDefaultNvsPartition
+    ) -> Result<EspKeyValueStorage<NvsDefault>, RuntimeError> {
+        let nvs = EspNvs::new(nvs_partition, NVS_NAMESPACE, true)?;
         Ok(EspKeyValueStorage::new(nvs))
     }
 

@@ -39,10 +39,11 @@ impl PeerRegistry {
     }
 
     pub fn alloc(&mut self, transport_peer_id: Vec<u8>) -> Result<SessionId, RuntimeError> {
-        if let Some((session_id, slot)) = self.sessions
-            .iter_mut()
-            .enumerate()
-            .find(|(_, slot)| slot.is_none())
+        if
+            let Some((session_id, slot)) = self.sessions
+                .iter_mut()
+                .enumerate()
+                .find(|(_, slot)| slot.is_none())
         {
             *slot = Some(PeerSession {
                 id: session_id,
@@ -61,15 +62,17 @@ impl PeerRegistry {
         }
 
         let session_id = self.sessions.len();
-        self.sessions.push(Some(PeerSession {
-            id: session_id,
-            node_peer_id: None,
-            transport_peer_id,
-            state: SessionState::TcpConnected,
-            max_frame_len: 0,
-            max_blocks_per_chunk: 0,
-            last_seen_ms: 0,
-        }));
+        self.sessions.push(
+            Some(PeerSession {
+                id: session_id,
+                node_peer_id: None,
+                transport_peer_id,
+                state: SessionState::TcpConnected,
+                max_frame_len: 0,
+                max_blocks_per_chunk: 0,
+                last_seen_ms: 0,
+            })
+        );
         Ok(session_id)
     }
 
@@ -88,13 +91,13 @@ impl PeerRegistry {
     ) -> Result<(), RuntimeError> {
         if let Some(existing) = self.by_node_peer.get(&node_peer_id) {
             if *existing != id {
-                return Err(RuntimeError::config("node peer is already registered to another session"));
+                return Err(
+                    RuntimeError::config("node peer is already registered to another session")
+                );
             }
         }
 
-        let session = self
-            .get_mut(id)
-            .ok_or_else(|| RuntimeError::config("unknown peer session"))?;
+        let session = self.get_mut(id).ok_or_else(|| RuntimeError::config("unknown peer session"))?;
         session.node_peer_id = Some(node_peer_id);
         self.by_node_peer.insert(node_peer_id, id);
         Ok(())

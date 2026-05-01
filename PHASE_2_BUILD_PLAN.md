@@ -1,21 +1,25 @@
 # rust-proof Phase 2 Build Plan
 
 Date: 2026-04-23  
-Status: execution plan for the first runtime-hosting phase after shared-engine extraction
+Status: code implementation complete for the first embedded runtime-hosting phase; manual hardware smoke validation remains
 
-## Status Update: 2026-04-24
+## Status Update: 2026-05-01
 
-`erp-runtime/` has moved beyond pure bring-up and now hosts a first embedded runtime shell around `rp-node`.
+`erp-runtime/` now hosts the full first embedded runtime shell around `rp-node`.
 
 Current implemented slices include:
 
 - runtime bootstrap that constructs `NodeEngine`
 - runtime event pump and `NodeAction` dispatch
 - NVS-backed snapshot and block persistence
-- wake scheduling plus a test-only startup heartbeat
+- wake scheduling
 - runtime identity selection and signing integration
+- static-peer TCP listener and bootstrap dialing
+- libp2p-compatible multistream, Noise XX, Yamux, Identify, and NodeHello session setup
+- session lifecycle management, peer registry updates, and command routing for Sync and Announce flows
+- host and embedded-target `cargo check` validation with a warning-free build
 
-The largest remaining Phase 2 gap is transport: the embedded network adapter is still mostly scaffolding, and repeatable hardware smoke validation is still required.
+The remaining Phase 2 boundary is now manual rather than architectural: repeatable hardware smoke validation on the ESP target is still required.
 
 ## 1. Purpose
 
@@ -100,6 +104,8 @@ Phase 2 for `erp-runtime` is complete when all of the following are true:
   - load the latest persisted snapshot and continue
 - `cd erp-runtime && cargo check` passes
 - hardware smoke testing shows the runtime boots and runs its event loop without crashing immediately
+
+As of 2026-05-01, every software-side item above is implemented and validated in build checks. The remaining unchecked item is the hardware smoke requirement.
 
 ## 7. Delivery Order
 
@@ -277,6 +283,12 @@ Exit criteria:
 - device boot smoke test is repeatable
 - the embedded crate is now a real runtime host for `rp-node`
 
+Current state:
+
+- `cargo check` passes
+- `cargo check --target riscv32imafc-esp-espidf` passes
+- the device-boot and live-peer smoke path still needs to be run on hardware
+
 ## 8. Concrete First File Plan
 
 The first edits in Phase 2 should be concentrated in these files:
@@ -316,14 +328,38 @@ cd erp-runtime && cargo run
 
 Use hardware smoke logs as part of Phase 2 validation. Compile success alone is not enough.
 
-## 10. Immediate Next Slice
+## 9.1 Bootstrap Configuration
 
-The first execution slice should be small:
+The current embedded transport stack uses static bootstrap peers.
 
-1. add `rp-node` to `erp-runtime/Cargo.toml`
-2. create `erp-runtime/src/runtime.rs`
-3. construct `NodeEngine` during boot
-4. replace the current infinite app loop with a runtime-owned event loop skeleton
-5. keep `cargo check` green after each edit
+Configure them at build time with the `BOOTSTRAP_PEERS` environment variable.
 
-That is the correct first Phase 2 increment because it changes the crate shape before it changes the device behavior.
+Format:
+
+- comma-separated entries
+- each entry is `/ip4/<addr>/tcp/<port>` or `/dns4/<host>/tcp/<port>`
+- append `@<libp2p-peer-id>` when you want to pin the expected remote transport identity
+
+Examples:
+
+```sh
+BOOTSTRAP_PEERS=/ip4/192.168.1.10/tcp/4001
+BOOTSTRAP_PEERS=/dns4/bootstrap.example.com/tcp/4001@12D3KooW...
+BOOTSTRAP_PEERS=/ip4/192.168.1.10/tcp/4001,/dns4/bootstrap.example.com/tcp/4001@12D3KooW...
+```
+
+These values are compiled into the embedded binary in the same style as `WIFI_SSID` and `WIFI_PASS`.
+
+## 10. Final Manual Close-Out
+
+The implementation work for this Phase 2 slice is complete.
+
+The remaining close-out steps are manual:
+
+1. build and flash the current `erp-runtime` image to the ESP target
+2. verify Wi-Fi association and network-manager startup in logs
+3. verify one inbound or outbound peer session reaches Identify and NodeHello readiness
+4. verify one Sync or Announce exchange succeeds end to end
+5. verify one snapshot load or persist path completes without crashing the runtime
+
+Once those hardware smoke checks are repeatable, this Phase 2 delivery is complete in full, not just in build validation.

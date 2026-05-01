@@ -51,7 +51,8 @@ pub fn run() -> Result<(), RuntimeError> {
     let (storage_tx, storage_rx) = mpsc::channel::<StorageCommand>(STORAGE_CHANNEL_CAPACITY);
     let (wake_tx, wake_rx) = mpsc::channel::<WakeCommand>(WAKE_CHANNEL_CAPACITY);
     let identity_manager = IdentityManager::select()?;
-    let wifi = create_wifi()?;
+    let nvs_partition = EspDefaultNvsPartition::take().map_err(RuntimeError::esp)?;
+    let wifi = create_wifi(nvs_partition.clone())?;
 
     let node_runtime = NodeManager::new(node_engine, event_rx, network_tx, storage_tx, wake_tx);
     let network_manager = NetworkManager::new(
@@ -59,8 +60,9 @@ pub fn run() -> Result<(), RuntimeError> {
         event_tx.clone(),
         identity_manager,
         wifi,
+        nvs_partition.clone()
     )?;
-    let nvs_storage = NvsStorage::new().map_err(RuntimeError::StorageInit)?;
+    let nvs_storage = NvsStorage::new(nvs_partition).map_err(RuntimeError::StorageInit)?;
     let storage_manager = StorageManager::new(nvs_storage, event_tx.clone(), storage_rx);
     let wake_manager = WakeManager::new(event_tx.clone(), wake_rx);
 
@@ -73,17 +75,16 @@ pub fn run() -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn create_wifi() -> Result<AsyncWifi<EspWifi<'static>>, RuntimeError> {
+fn create_wifi(nvs_partition: EspDefaultNvsPartition) -> Result<AsyncWifi<EspWifi<'static>>, RuntimeError> {
     let ssid = option_env!("WIFI_SSID").ok_or(RuntimeError::config(WIFI_SSID_MISSING))?;
     let password = option_env!("WIFI_PASS").ok_or(RuntimeError::config(WIFI_PASS_MISSING))?;
 
     let peripherals = Peripherals::take().map_err(RuntimeError::esp)?;
     let sys_loop = EspSystemEventLoop::take().map_err(RuntimeError::esp)?;
     let timer_service = EspTaskTimerService::new().map_err(RuntimeError::esp)?;
-    let nvs = EspDefaultNvsPartition::take().map_err(RuntimeError::esp)?;
 
     let mut wifi = AsyncWifi::wrap(
-        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs)).map_err(RuntimeError::esp)?,
+        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs_partition)).map_err(RuntimeError::esp)?,
         sys_loop,
         timer_service
     ).map_err(RuntimeError::esp)?;
