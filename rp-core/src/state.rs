@@ -127,11 +127,16 @@ impl State {
         let valid_stakes = self.stakes
             .iter()
             .filter_map(|(key_bytes, stake)| {
-                verifying_key_from_bytes(key_bytes).ok().map(|verifying_key| (*stake, verifying_key))
+                verifying_key_from_bytes(key_bytes)
+                    .ok()
+                    .map(|verifying_key| (*stake, verifying_key))
             })
             .collect::<Vec<_>>();
 
-        let total_stake: u64 = valid_stakes.iter().map(|(stake, _)| *stake).sum();
+        let total_stake: u64 = valid_stakes
+            .iter()
+            .map(|(stake, _)| *stake)
+            .sum();
         if total_stake == 0 {
             return None;
         }

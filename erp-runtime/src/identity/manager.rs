@@ -326,7 +326,8 @@ mod tests {
     fn sign_returns_signature_for_verifying_key() {
         let signing_key = signing_key_from_bytes(&[9u8; 32]).unwrap();
         let manager = IdentityManager::new(signing_key);
-        let message = b"embedded identity transcript for noise that is longer than thirty-two bytes";
+        let message =
+            b"embedded identity transcript for noise that is longer than thirty-two bytes";
 
         let signature_bytes = manager.sign(message).unwrap();
         let signature = Signature::from_slice(&signature_bytes).unwrap();

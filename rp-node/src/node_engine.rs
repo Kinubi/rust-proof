@@ -664,7 +664,8 @@ mod tests {
         let NodeAction::SendFrame { frame, .. } = &actions[0] else {
             panic!("expected SendFrame action");
         };
-        let NetworkMessage::SyncResponse(response) = NetworkMessage::from_bytes(frame).unwrap() else {
+        let NetworkMessage::SyncResponse(response) =
+            NetworkMessage::from_bytes(frame).unwrap() else {
             panic!("expected SyncResponse frame");
         };
 
