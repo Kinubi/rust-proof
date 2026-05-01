@@ -1,7 +1,14 @@
 use std::net::SocketAddr;
 
 use multiaddr::{ Multiaddr, Protocol };
-use quick_protobuf::{ BytesReader, MessageRead, MessageWrite, Writer, WriterBackend, sizeofs::sizeof_len };
+use quick_protobuf::{
+    BytesReader,
+    MessageRead,
+    MessageWrite,
+    Writer,
+    WriterBackend,
+    sizeofs::sizeof_len,
+};
 
 use crate::{
     network::{
@@ -30,11 +37,7 @@ pub fn encode_identify(info: &IdentifyInfo) -> Result<Vec<u8>, RuntimeError> {
         protocolVersion: Some(info.protocol_version.clone()),
         agentVersion: Some(info.agent_version.clone()),
         publicKey: Some(info.transport_public_key.clone()),
-        listenAddrs: info
-            .listen_addrs
-            .iter()
-            .map(encode_multiaddr)
-            .collect::<Result<Vec<_>, _>>()?,
+        listenAddrs: info.listen_addrs.iter().map(encode_multiaddr).collect::<Result<Vec<_>, _>>()?,
         observedAddr: info.observed_addr.map(encode_socket_addr),
         protocols: info.supported_protocols.clone(),
         signedPeerRecord: None,
@@ -51,28 +54,28 @@ pub fn encode_identify(info: &IdentifyInfo) -> Result<Vec<u8>, RuntimeError> {
 pub fn decode_identify(bytes: &[u8]) -> Result<IdentifyInfo, RuntimeError> {
     let (_, payload) = decode_length_prefix(bytes, MAX_IDENTIFY_MESSAGE_SIZE)?;
     let mut reader = BytesReader::from_bytes(payload);
-    let message = IdentifyMessage::from_reader(&mut reader, payload)
-        .map_err(|_| RuntimeError::crypto("failed to decode identify protobuf payload"))?;
+    let message = IdentifyMessage::from_reader(&mut reader, payload).map_err(|_|
+        RuntimeError::crypto("failed to decode identify protobuf payload")
+    )?;
 
-    let transport_public_key = message
-        .publicKey
-        .ok_or_else(|| RuntimeError::config("identify payload is missing a transport public key"))?;
-    let transport_public_key_decoded = libp2p_identity::PublicKey::try_decode_protobuf(
-        &transport_public_key,
-    )
-    .map_err(|_| RuntimeError::crypto("identify payload contains an invalid transport public key"))?;
+    let transport_public_key = message.publicKey.ok_or_else(||
+        RuntimeError::config("identify payload is missing a transport public key")
+    )?;
+    let transport_public_key_decoded = libp2p_identity::PublicKey
+        ::try_decode_protobuf(&transport_public_key)
+        .map_err(|_|
+            RuntimeError::crypto("identify payload contains an invalid transport public key")
+        )?;
 
     Ok(IdentifyInfo {
         protocol_version: message.protocolVersion.unwrap_or_default(),
         agent_version: message.agentVersion.unwrap_or_default(),
-        listen_addrs: message
-            .listenAddrs
+        listen_addrs: message.listenAddrs
             .into_iter()
             .filter_map(|bytes| decode_multiaddr(&bytes).ok())
             .collect(),
         supported_protocols: message.protocols,
-        observed_addr: message
-            .observedAddr
+        observed_addr: message.observedAddr
             .as_deref()
             .and_then(|bytes| decode_socket_addr(bytes).ok()),
         transport_public_key,
@@ -98,15 +101,27 @@ impl<'a> MessageRead<'a> for IdentifyMessage {
 
         while !reader.is_eof() {
             match reader.next_tag(bytes) {
-                Ok(42) => message.protocolVersion = Some(reader.read_string(bytes)?.to_owned()),
-                Ok(50) => message.agentVersion = Some(reader.read_string(bytes)?.to_owned()),
-                Ok(10) => message.publicKey = Some(reader.read_bytes(bytes)?.to_owned()),
+                Ok(42) => {
+                    message.protocolVersion = Some(reader.read_string(bytes)?.to_owned());
+                }
+                Ok(50) => {
+                    message.agentVersion = Some(reader.read_string(bytes)?.to_owned());
+                }
+                Ok(10) => {
+                    message.publicKey = Some(reader.read_bytes(bytes)?.to_owned());
+                }
                 Ok(18) => message.listenAddrs.push(reader.read_bytes(bytes)?.to_owned()),
-                Ok(34) => message.observedAddr = Some(reader.read_bytes(bytes)?.to_owned()),
+                Ok(34) => {
+                    message.observedAddr = Some(reader.read_bytes(bytes)?.to_owned());
+                }
                 Ok(26) => message.protocols.push(reader.read_string(bytes)?.to_owned()),
-                Ok(66) => message.signedPeerRecord = Some(reader.read_bytes(bytes)?.to_owned()),
+                Ok(66) => {
+                    message.signedPeerRecord = Some(reader.read_bytes(bytes)?.to_owned());
+                }
                 Ok(tag) => reader.read_unknown(bytes, tag)?,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    return Err(error);
+                }
             }
         }
 
@@ -116,16 +131,25 @@ impl<'a> MessageRead<'a> for IdentifyMessage {
 
 impl MessageWrite for IdentifyMessage {
     fn get_size(&self) -> usize {
-        self.protocolVersion.as_ref().map_or(0, |value| 1 + sizeof_len(value.len()))
-            + self.agentVersion.as_ref().map_or(0, |value| 1 + sizeof_len(value.len()))
-            + self.publicKey.as_ref().map_or(0, |value| 1 + sizeof_len(value.len()))
-            + self.listenAddrs.iter().map(|value| 1 + sizeof_len(value.len())).sum::<usize>()
-            + self.observedAddr.as_ref().map_or(0, |value| 1 + sizeof_len(value.len()))
-            + self.protocols.iter().map(|value| 1 + sizeof_len(value.len())).sum::<usize>()
-            + self.signedPeerRecord.as_ref().map_or(0, |value| 1 + sizeof_len(value.len()))
+        self.protocolVersion.as_ref().map_or(0, |value| 1 + sizeof_len(value.len())) +
+            self.agentVersion.as_ref().map_or(0, |value| 1 + sizeof_len(value.len())) +
+            self.publicKey.as_ref().map_or(0, |value| 1 + sizeof_len(value.len())) +
+            self.listenAddrs
+                .iter()
+                .map(|value| 1 + sizeof_len(value.len()))
+                .sum::<usize>() +
+            self.observedAddr.as_ref().map_or(0, |value| 1 + sizeof_len(value.len())) +
+            self.protocols
+                .iter()
+                .map(|value| 1 + sizeof_len(value.len()))
+                .sum::<usize>() +
+            self.signedPeerRecord.as_ref().map_or(0, |value| 1 + sizeof_len(value.len()))
     }
 
-    fn write_message<W: WriterBackend>(&self, writer: &mut Writer<W>) -> quick_protobuf::Result<()> {
+    fn write_message<W: WriterBackend>(
+        &self,
+        writer: &mut Writer<W>
+    ) -> quick_protobuf::Result<()> {
         if let Some(value) = &self.protocolVersion {
             writer.write_with_tag(42, |writer| writer.write_string(value))?;
         }
@@ -153,19 +177,23 @@ impl MessageWrite for IdentifyMessage {
 }
 
 fn encode_multiaddr(addr: &MultiaddrLite) -> Result<Vec<u8>, RuntimeError> {
-    let multiaddr = match addr {
-        MultiaddrLite::Ip4Tcp { addr, port } => format!("/ip4/{}.{}.{}.{}/tcp/{port}", addr[0], addr[1], addr[2], addr[3]),
-        MultiaddrLite::Dns4Tcp { host, port } => format!("/dns4/{host}/tcp/{port}"),
-    }
-    .parse::<Multiaddr>()
-    .map_err(|_| RuntimeError::config("failed to encode identify listen multiaddr"))?;
+    let multiaddr = (
+        match addr {
+            MultiaddrLite::Ip4Tcp { addr, port } =>
+                format!("/ip4/{}.{}.{}.{}/tcp/{port}", addr[0], addr[1], addr[2], addr[3]),
+            MultiaddrLite::Dns4Tcp { host, port } => format!("/dns4/{host}/tcp/{port}"),
+        }
+    )
+        .parse::<Multiaddr>()
+        .map_err(|_| RuntimeError::config("failed to encode identify listen multiaddr"))?;
 
     Ok(multiaddr.to_vec())
 }
 
 fn decode_multiaddr(bytes: &[u8]) -> Result<MultiaddrLite, RuntimeError> {
-    let multiaddr = Multiaddr::try_from(bytes.to_vec())
-        .map_err(|_| RuntimeError::config("failed to decode identify multiaddr bytes"))?;
+    let multiaddr = Multiaddr::try_from(bytes.to_vec()).map_err(|_|
+        RuntimeError::config("failed to decode identify multiaddr bytes")
+    )?;
     let mut protocols = multiaddr.iter();
 
     match (protocols.next(), protocols.next(), protocols.next()) {
@@ -180,19 +208,22 @@ fn decode_multiaddr(bytes: &[u8]) -> Result<MultiaddrLite, RuntimeError> {
 }
 
 fn encode_socket_addr(addr: SocketAddr) -> Vec<u8> {
-    let multiaddr = match addr {
-        SocketAddr::V4(addr) => format!("/ip4/{}/tcp/{}", addr.ip(), addr.port()),
-        SocketAddr::V6(addr) => format!("/ip6/{}/tcp/{}", addr.ip(), addr.port()),
-    }
-    .parse::<Multiaddr>()
-    .expect("socket address should always encode to a canonical multiaddr");
+    let multiaddr = (
+        match addr {
+            SocketAddr::V4(addr) => format!("/ip4/{}/tcp/{}", addr.ip(), addr.port()),
+            SocketAddr::V6(addr) => format!("/ip6/{}/tcp/{}", addr.ip(), addr.port()),
+        }
+    )
+        .parse::<Multiaddr>()
+        .expect("socket address should always encode to a canonical multiaddr");
 
     multiaddr.to_vec()
 }
 
 fn decode_socket_addr(bytes: &[u8]) -> Result<SocketAddr, RuntimeError> {
-    let multiaddr = Multiaddr::try_from(bytes.to_vec())
-        .map_err(|_| RuntimeError::config("failed to decode observed multiaddr bytes"))?;
+    let multiaddr = Multiaddr::try_from(bytes.to_vec()).map_err(|_|
+        RuntimeError::config("failed to decode observed multiaddr bytes")
+    )?;
     let mut protocols = multiaddr.iter();
 
     match (protocols.next(), protocols.next(), protocols.next()) {
