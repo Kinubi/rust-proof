@@ -40,11 +40,7 @@ use crate::{
                 encode_announce_request,
                 encode_announce_response,
             },
-            identify::{
-                IdentifyInfo,
-                decode_identify,
-                encode_identify,
-            },
+            identify::{ IdentifyInfo, decode_identify, encode_identify },
             node_hello::{
                 NodeHello,
                 NodeHelloBuilder,
