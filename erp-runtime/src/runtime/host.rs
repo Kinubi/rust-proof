@@ -54,7 +54,12 @@ pub fn run() -> Result<(), RuntimeError> {
     let wifi = create_wifi()?;
 
     let node_runtime = NodeManager::new(node_engine, event_rx, network_tx, storage_tx, wake_tx);
-    let network_manager = NetworkManager::new(network_rx, event_tx.clone(), identity_manager, wifi);
+    let network_manager = NetworkManager::new(
+        network_rx,
+        event_tx.clone(),
+        identity_manager,
+        wifi,
+    )?;
     let nvs_storage = NvsStorage::new().map_err(RuntimeError::StorageInit)?;
     let storage_manager = StorageManager::new(nvs_storage, event_tx.clone(), storage_rx);
     let wake_manager = WakeManager::new(event_tx.clone(), wake_rx);

@@ -31,23 +31,54 @@ pub struct PeerRegistry {
 
 impl PeerRegistry {
     pub fn new(max_peers: usize) -> Self {
-        let _ = max_peers;
-        todo!("implement peer registry initialization")
+        Self {
+            sessions: Vec::with_capacity(max_peers),
+            by_node_peer: BTreeMap::new(),
+            max_peers,
+        }
     }
 
     pub fn alloc(&mut self, transport_peer_id: Vec<u8>) -> Result<SessionId, RuntimeError> {
-        let _ = transport_peer_id;
-        todo!("implement peer registry allocation")
+        if let Some((session_id, slot)) = self.sessions
+            .iter_mut()
+            .enumerate()
+            .find(|(_, slot)| slot.is_none())
+        {
+            *slot = Some(PeerSession {
+                id: session_id,
+                node_peer_id: None,
+                transport_peer_id,
+                state: SessionState::TcpConnected,
+                max_frame_len: 0,
+                max_blocks_per_chunk: 0,
+                last_seen_ms: 0,
+            });
+            return Ok(session_id);
+        }
+
+        if self.sessions.len() >= self.max_peers {
+            return Err(RuntimeError::config("peer registry is full"));
+        }
+
+        let session_id = self.sessions.len();
+        self.sessions.push(Some(PeerSession {
+            id: session_id,
+            node_peer_id: None,
+            transport_peer_id,
+            state: SessionState::TcpConnected,
+            max_frame_len: 0,
+            max_blocks_per_chunk: 0,
+            last_seen_ms: 0,
+        }));
+        Ok(session_id)
     }
 
     pub fn get(&self, id: SessionId) -> Option<&PeerSession> {
-        let _ = id;
-        todo!("implement peer lookup")
+        self.sessions.get(id).and_then(Option::as_ref)
     }
 
     pub fn get_mut(&mut self, id: SessionId) -> Option<&mut PeerSession> {
-        let _ = id;
-        todo!("implement mutable peer lookup")
+        self.sessions.get_mut(id).and_then(Option::as_mut)
     }
 
     pub fn register_node_peer(
@@ -55,21 +86,40 @@ impl PeerRegistry {
         id: SessionId,
         node_peer_id: [u8; 32]
     ) -> Result<(), RuntimeError> {
-        let _ = (id, node_peer_id);
-        todo!("implement node peer registration")
+        if let Some(existing) = self.by_node_peer.get(&node_peer_id) {
+            if *existing != id {
+                return Err(RuntimeError::config("node peer is already registered to another session"));
+            }
+        }
+
+        let session = self
+            .get_mut(id)
+            .ok_or_else(|| RuntimeError::config("unknown peer session"))?;
+        session.node_peer_id = Some(node_peer_id);
+        self.by_node_peer.insert(node_peer_id, id);
+        Ok(())
     }
 
     pub fn session_for_node(&self, peer: &[u8; 32]) -> Option<SessionId> {
-        let _ = peer;
-        todo!("implement node peer to session lookup")
+        self.by_node_peer.get(peer).copied()
     }
 
     pub fn ready_sessions(&self) -> Vec<SessionId> {
-        todo!("implement ready session listing")
+        self.sessions
+            .iter()
+            .enumerate()
+            .filter_map(|(session_id, session)| {
+                let session = session.as_ref()?;
+                matches!(session.state, SessionState::NodeReady).then_some(session_id)
+            })
+            .collect()
     }
 
     pub fn remove(&mut self, id: SessionId) -> Option<PeerSession> {
-        let _ = id;
-        todo!("implement peer removal")
+        let session = self.sessions.get_mut(id)?.take()?;
+        if let Some(node_peer_id) = session.node_peer_id {
+            self.by_node_peer.remove(&node_peer_id);
+        }
+        Some(session)
     }
 }
