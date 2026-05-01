@@ -78,29 +78,36 @@ impl IdentityManager {
     pub fn select() -> Result<Self, RuntimeError> {
         info!(target: TAG, "selecting runtime identity");
 
+        if let Some(identity) = Self::try_efuse()? {
+            return Ok(identity);
+        }
+
+        warn!(
+            target: TAG,
+            "no efuse ECDSA identity provisioned; falling back to development software identity"
+        );
+
+        Self::development()
+    }
+
+    pub fn try_efuse() -> Result<Option<Self>, RuntimeError> {
         match find_ecdsa_key_block() {
             Ok(key_block) => {
                 if let Some((major, minor)) = unsupported_esp32p4_ecdsa_revision() {
                     warn!(
                         target: TAG,
-                        "efuse ECDSA key found in block {}, but ESP32-P4 hardware ECDSA requires chip revision >= v3.0; current chip revision is v{}.{}; falling back to development software identity",
+                        "efuse ECDSA key found in block {}, but ESP32-P4 hardware ECDSA requires chip revision >= v3.0; current chip revision is v{}.{}; skipping hardware identity",
                         key_block,
                         major,
                         minor
                     );
-                    Self::development()
+                    Ok(None)
                 } else {
                     info!(target: TAG, "using efuse identity from key block {}", key_block);
-                    Self::from_efuse_block(key_block)
+                    Self::from_efuse_block(key_block).map(Some)
                 }
             }
-            Err("no efuse key with ECDSA_KEY purpose found") => {
-                warn!(
-                    target: TAG,
-                    "no efuse ECDSA identity provisioned; falling back to development software identity"
-                );
-                Self::development()
-            }
+            Err("no efuse key with ECDSA_KEY purpose found") => Ok(None),
             Err(error) => Err(RuntimeError::crypto(error)),
         }
     }

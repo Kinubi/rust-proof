@@ -13,12 +13,10 @@ pub struct PostcardCodec<T>(PhantomData<T>);
 
 impl<T> ValueCodec<T> for PostcardCodec<T> where T: Serialize + DeserializeOwned {
     fn encode(item: &T) -> Result<Vec<u8>, RuntimeError> {
-        let _ = item;
-        todo!("implement postcard encoding")
+        postcard::to_allocvec(item).map_err(|_| RuntimeError::crypto("failed to serialize postcard payload"))
     }
 
     fn decode(bytes: &[u8]) -> Result<T, RuntimeError> {
-        let _ = bytes;
-        todo!("implement postcard decoding")
+        postcard::from_bytes(bytes).map_err(|_| RuntimeError::crypto("failed to deserialize postcard payload"))
     }
 }
