@@ -11,7 +11,7 @@ use futures::{
     pin_mut,
     select,
 };
-use log::info;
+use log::debug;
 use rp_core::traits::{ FromBytes, ToBytes };
 use rp_node::network::message::{ AnnounceResponse, NetworkMessage, SyncResponse };
 use serde::{ Serialize, de::DeserializeOwned };
@@ -26,22 +26,26 @@ use crate::{
         config::{ MultiaddrLite, NetworkConfig },
         peer_registry::SessionId,
         protocol::{
+            advertised_protocols,
+            ANNOUNCE_PROTOCOL,
+            IDENTIFY_PROTOCOL,
+            IDENTIFY_PUSH_PROTOCOL,
+            INBOUND_SESSION_PROTOCOLS,
+            NODE_HELLO_PROTOCOL,
+            SESSION_SETUP_PROTOCOLS,
+            SYNC_PROTOCOL,
             announce::{
-                ANNOUNCE_PROTOCOL,
                 decode_announce_request,
                 decode_announce_response,
                 encode_announce_request,
                 encode_announce_response,
             },
             identify::{
-                IDENTIFY_PROTOCOL,
-                IDENTIFY_PUSH_PROTOCOL,
                 IdentifyInfo,
                 decode_identify,
                 encode_identify,
             },
             node_hello::{
-                NODE_HELLO_PROTOCOL,
                 NodeHello,
                 NodeHelloBuilder,
                 NodeHelloResponse,
@@ -49,7 +53,7 @@ use crate::{
                 PeerCapabilities,
                 VerifiedPeer,
             },
-            sync::{ SYNC_PROTOCOL, decode_sync_request, decode_sync_response, encode_sync_request },
+            sync::{ decode_sync_request, decode_sync_response, encode_sync_request },
         },
         socket::esp_idf::EspTcpStream,
         transport::{
@@ -66,6 +70,15 @@ const IDENTIFY_PROTOCOL_VERSION: &str = "rust-proof/1";
 const IDENTIFY_AGENT_VERSION: &str = "erp-runtime/0.1.0";
 const SESSION_CONTROL_CHANNEL_CAPACITY: usize = 8;
 const TAG: &str = "session";
+
+type SecureStream = noise::NoiseStream<EspTcpStream>;
+type SessionMuxer = YamuxMuxer<SecureStream>;
+type ActiveSession = yamux::YamuxSession<SessionMuxer>;
+
+struct EstablishedSession {
+    yamux_session: ActiveSession,
+    verified_peer: VerifiedPeer,
+}
 
 pub enum SessionCommand {
     SendFrame(Vec<u8>),
@@ -102,6 +115,7 @@ pub struct SessionWorker {
     pub expected_transport_peer: Option<Vec<u8>>,
 }
 
+#[derive(Clone, Copy)]
 pub enum ConnectionRole {
     Inbound,
     Outbound,
@@ -128,139 +142,34 @@ impl SessionWorker {
 
         let mut remote_node_peer_opt = None;
         let result = (async {
-            info!(target: TAG, "session {} starting", session_id);
-            let mut io = stream;
-            info!(target: TAG, "session {} obtained futures IO", session_id);
-            let noise_output = match role {
-                ConnectionRole::Outbound => {
-                    info!(target: TAG, "session {} selecting outbound noise protocol", session_id);
-                    dialer_select(&mut io, NOISE_PROTOCOL).await?;
-                    info!(target: TAG, "session {} upgrading outbound noise transport", session_id);
-                    noise::upgrade_outbound(io, transport_identity.as_ref()).await?
-                }
-                ConnectionRole::Inbound => {
-                    info!(target: TAG, "session {} selecting inbound noise protocol", session_id);
-                    listener_select(&mut io, &[NOISE_PROTOCOL]).await?;
-                    info!(target: TAG, "session {} upgrading inbound noise transport", session_id);
-                    noise::upgrade_inbound(io, transport_identity.as_ref()).await?
-                }
-            };
-            info!(target: TAG, "session {} completed noise handshake", session_id);
+            let mut event_tx = event_tx;
+            let EstablishedSession { mut yamux_session, verified_peer } = establish_session(
+                session_id,
+                stream,
+                role,
+                node_identity.as_ref(),
+                transport_identity.as_ref(),
+                &config,
+                expected_transport_peer.as_deref()
+            ).await?;
 
-            if let Some(expected_transport_peer) = expected_transport_peer.as_ref() {
-                if
-                    expected_transport_peer.as_slice() !=
-                    noise_output.remote_transport_peer_id.as_slice()
-                {
-                    return Err(
-                        RuntimeError::config(
-                            "bootstrap peer transport identity did not match expectation"
-                        )
-                    );
-                }
-            }
-
-            let mut yamux_session = match role {
-                ConnectionRole::Outbound => {
-                    info!(target: TAG, "session {} upgrading outbound yamux", session_id);
-                    yamux::upgrade_outbound(noise_output.stream).await?
-                }
-                ConnectionRole::Inbound => {
-                    info!(target: TAG, "session {} upgrading inbound yamux", session_id);
-                    yamux::upgrade_inbound(noise_output.stream).await?
-                }
-            };
-            info!(target: TAG, "session {} completed yamux setup", session_id);
-
-            let verified_peer = match role {
-                ConnectionRole::Outbound => {
-                    info!(target: TAG, "session {} running outbound identify/node-hello handshake", session_id);
-                    complete_outbound_handshake(
-                        &mut yamux_session.muxer,
-                        node_identity.as_ref(),
-                        transport_identity.as_ref(),
-                        &config,
-                        &noise_output.remote_transport_peer_id
-                    ).await?
-                }
-                ConnectionRole::Inbound => {
-                    info!(target: TAG, "session {} running inbound identify/node-hello handshake", session_id);
-                    complete_inbound_handshake(
-                        &mut yamux_session.muxer,
-                        node_identity.as_ref(),
-                        transport_identity.as_ref(),
-                        &config,
-                        &noise_output.remote_transport_peer_id
-                    ).await?
-                }
-            };
-            info!(target: TAG, "session {} verified remote node peer {:?}", session_id, verified_peer.node_peer_id);
+            debug!(target: TAG, "session {} verified remote node peer {:?}", session_id, verified_peer.node_peer_id);
 
             send_session_event(&session_event_tx, SessionEvent::Ready {
                 session_id,
                 verified_peer: verified_peer.clone(),
             })?;
 
-            let remote_node_peer = verified_peer.node_peer_id;
-            remote_node_peer_opt = Some(remote_node_peer);
-            let mut deferred_commands = VecDeque::new();
-            loop {
-                enum LoopEvent {
-                    Command(Option<SessionCommand>),
-                    Inbound(Result<Option<::yamux::Stream>, RuntimeError>),
-                }
-
-                let next_event = if let Some(command) = deferred_commands.pop_front() {
-                    LoopEvent::Command(Some(command))
-                } else {
-                    let next_command = command_rx.next().fuse();
-                    let next_inbound = yamux_session.muxer.accept_substream().fuse();
-                    pin_mut!(next_command, next_inbound);
-
-                    select! {
-                        command = next_command => LoopEvent::Command(command),
-                        inbound = next_inbound => LoopEvent::Inbound(inbound),
-                    }
-                };
-
-                match next_event {
-                    LoopEvent::Command(Some(SessionCommand::SendFrame(frame))) => {
-                        handle_outbound_frame(
-                            &mut yamux_session.muxer,
-                            &config,
-                            &mut event_tx.clone(),
-                            remote_node_peer,
-                            frame
-                        ).await?;
-                    }
-                    LoopEvent::Command(Some(SessionCommand::Disconnect)) => {
-                        break;
-                    }
-                    LoopEvent::Command(None) => {
-                        break;
-                    }
-                    LoopEvent::Inbound(Ok(Some(substream))) => {
-                        handle_inbound_substream(
-                            &mut yamux_session.muxer,
-                            substream,
-                            node_identity.as_ref(),
-                            transport_identity.as_ref(),
-                            &config,
-                            &mut event_tx.clone(),
-                            &verified_peer,
-                            &mut command_rx,
-                            &mut deferred_commands
-                        ).await?;
-                    }
-                    LoopEvent::Inbound(Ok(None)) => {
-                        break;
-                    }
-                    LoopEvent::Inbound(Err(error)) => {
-                        return Err(error);
-                    }
-                }
-            }
-
+            remote_node_peer_opt = Some(verified_peer.node_peer_id);
+            run_established_session(
+                &mut yamux_session,
+                node_identity.as_ref(),
+                transport_identity.as_ref(),
+                &config,
+                &mut event_tx,
+                &mut command_rx,
+                &verified_peer
+            ).await?;
             let _ = yamux_session.muxer.close().await;
             Ok(())
         }).await;
@@ -278,6 +187,155 @@ pub fn session_command_channel() -> (SessionCommandTx, SessionCommandRx) {
     mpsc::channel(SESSION_CONTROL_CHANNEL_CAPACITY)
 }
 
+async fn establish_session(
+    session_id: SessionId,
+    stream: EspTcpStream,
+    role: ConnectionRole,
+    node_identity: &IdentityManager,
+    transport_identity: &TransportIdentityManager,
+    config: &NetworkConfig,
+    expected_transport_peer: Option<&[u8]>
+) -> Result<EstablishedSession, RuntimeError> {
+    debug!(target: TAG, "session {} starting", session_id);
+    let noise_output = upgrade_noise_transport(session_id, stream, role, transport_identity).await?;
+
+    if let Some(expected_transport_peer) = expected_transport_peer {
+        if expected_transport_peer != noise_output.remote_transport_peer_id.as_slice() {
+            return Err(
+                RuntimeError::config("bootstrap peer transport identity did not match expectation")
+            );
+        }
+    }
+
+    let mut yamux_session = upgrade_yamux_transport(session_id, role, noise_output.stream).await?;
+    let verified_peer = match role {
+        ConnectionRole::Outbound => {
+            debug!(target: TAG, "session {} running outbound identify/node-hello handshake", session_id);
+            complete_outbound_handshake(
+                &mut yamux_session.muxer,
+                node_identity,
+                transport_identity,
+                config,
+                &noise_output.remote_transport_peer_id
+            ).await?
+        }
+        ConnectionRole::Inbound => {
+            debug!(target: TAG, "session {} running inbound identify/node-hello handshake", session_id);
+            complete_inbound_handshake(
+                &mut yamux_session.muxer,
+                node_identity,
+                transport_identity,
+                config,
+                &noise_output.remote_transport_peer_id
+            ).await?
+        }
+    };
+
+    Ok(EstablishedSession { yamux_session, verified_peer })
+}
+
+async fn upgrade_noise_transport(
+    session_id: SessionId,
+    mut stream: EspTcpStream,
+    role: ConnectionRole,
+    transport_identity: &TransportIdentityManager
+) -> Result<noise::NoiseUpgradeOutput<SecureStream>, RuntimeError> {
+    let noise_output = match role {
+        ConnectionRole::Outbound => {
+            dialer_select(&mut stream, NOISE_PROTOCOL).await?;
+            noise::upgrade_outbound(stream, transport_identity).await?
+        }
+        ConnectionRole::Inbound => {
+            listener_select(&mut stream, &[NOISE_PROTOCOL]).await?;
+            noise::upgrade_inbound(stream, transport_identity).await?
+        }
+    };
+    debug!(target: TAG, "session {} completed noise handshake", session_id);
+    Ok(noise_output)
+}
+
+async fn upgrade_yamux_transport(
+    session_id: SessionId,
+    role: ConnectionRole,
+    stream: SecureStream
+) -> Result<ActiveSession, RuntimeError> {
+    let yamux_session = match role {
+        ConnectionRole::Outbound => yamux::upgrade_outbound(stream).await?,
+        ConnectionRole::Inbound => yamux::upgrade_inbound(stream).await?,
+    };
+    debug!(target: TAG, "session {} completed yamux setup", session_id);
+    Ok(yamux_session)
+}
+
+async fn run_established_session(
+    yamux_session: &mut ActiveSession,
+    node_identity: &IdentityManager,
+    transport_identity: &TransportIdentityManager,
+    config: &NetworkConfig,
+    event_tx: &mut EventTx,
+    command_rx: &mut SessionCommandRx,
+    verified_peer: &VerifiedPeer
+) -> Result<(), RuntimeError> {
+    let remote_node_peer = verified_peer.node_peer_id;
+    let mut deferred_commands = VecDeque::new();
+
+    loop {
+        enum LoopEvent {
+            Command(Option<SessionCommand>),
+            Inbound(Result<Option<::yamux::Stream>, RuntimeError>),
+        }
+
+        let next_event = if let Some(command) = deferred_commands.pop_front() {
+            LoopEvent::Command(Some(command))
+        } else {
+            let next_command = command_rx.next().fuse();
+            let next_inbound = yamux_session.muxer.accept_substream().fuse();
+            pin_mut!(next_command, next_inbound);
+
+            select! {
+                command = next_command => LoopEvent::Command(command),
+                inbound = next_inbound => LoopEvent::Inbound(inbound),
+            }
+        };
+
+        match next_event {
+            LoopEvent::Command(Some(SessionCommand::SendFrame(frame))) => {
+                handle_outbound_frame(
+                    &mut yamux_session.muxer,
+                    config,
+                    event_tx,
+                    remote_node_peer,
+                    frame
+                ).await?;
+            }
+            LoopEvent::Command(Some(SessionCommand::Disconnect)) | LoopEvent::Command(None) => {
+                break;
+            }
+            LoopEvent::Inbound(Ok(Some(substream))) => {
+                handle_inbound_substream(
+                    &mut yamux_session.muxer,
+                    substream,
+                    node_identity,
+                    transport_identity,
+                    config,
+                    event_tx,
+                    verified_peer,
+                    command_rx,
+                    &mut deferred_commands
+                ).await?;
+            }
+            LoopEvent::Inbound(Ok(None)) => {
+                break;
+            }
+            LoopEvent::Inbound(Err(error)) => {
+                return Err(error);
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn complete_outbound_handshake<S>(
     muxer: &mut YamuxMuxer<S>,
     node_identity: &IdentityManager,
@@ -289,19 +347,11 @@ async fn complete_outbound_handshake<S>(
 {
     // libp2p identify on /ipfs/id/1.0.0 is request/response: the opener requests identify,
     // the listener replies with its identify payload and closes the substream.
-    info!(target: TAG, "waiting for identify request from remote");
+    debug!(target: TAG, "waiting for identify request from remote");
     serve_identify_request(muxer, config, transport_identity).await?;
 
-    info!(target: TAG, "requesting identify from remote");
-    let identify = request_identify(muxer, config, authenticated_transport_peer).await?;
-    info!(target: TAG, "received identify from remote: peer_id={:?}", identify.transport_peer_id);
-    if identify.transport_peer_id.as_slice() != authenticated_transport_peer {
-        return Err(
-            RuntimeError::config(
-                "identify transport peer did not match the authenticated transport session"
-            )
-        );
-    }
+    debug!(target: TAG, "requesting identify from remote");
+    request_identify(muxer, config, authenticated_transport_peer).await?;
 
     request_node_hello(
         muxer,
@@ -332,7 +382,7 @@ async fn complete_inbound_handshake<S>(
         };
 
         let mut io = muxer.io(&mut substream);
-        let protocol = listener_select(&mut io, &[IDENTIFY_PROTOCOL, NODE_HELLO_PROTOCOL]).await?;
+        let protocol = listener_select(&mut io, SESSION_SETUP_PROTOCOLS).await?;
 
         match protocol.as_str() {
             IDENTIFY_PROTOCOL => {
@@ -364,22 +414,21 @@ async fn serve_identify_request<S>(
     muxer: &mut YamuxMuxer<S>,
     config: &NetworkConfig,
     transport_identity: &TransportIdentityManager
-) -> Result<IdentifyInfo, RuntimeError>
+) -> Result<(), RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
-    info!(target: TAG, "serve_identify_request: waiting for substream");
+    debug!(target: TAG, "serve_identify_request: waiting for substream");
     let Some(mut substream) = muxer.accept_substream().await? else {
         return Err(RuntimeError::config("remote closed the connection before requesting identify"));
     };
-    info!(target: TAG, "serve_identify_request: got substream, starting protocol negotiation");
+    debug!(target: TAG, "serve_identify_request: got substream, starting protocol negotiation");
 
     let mut io = muxer.io(&mut substream);
     listener_select(&mut io, &[IDENTIFY_PROTOCOL]).await?;
-    info!(target: TAG, "serve_identify_request: protocol negotiated, sending identify frame");
+    debug!(target: TAG, "serve_identify_request: protocol negotiated, sending identify frame");
     send_identify(&mut io, config, transport_identity).await?;
-    let identify = build_local_identify(config, transport_identity);
-    info!(target: TAG, "serve_identify_request: identify sent");
-    Ok(identify)
+    debug!(target: TAG, "serve_identify_request: identify sent");
+    Ok(())
 }
 
 async fn request_identify<S>(
@@ -535,17 +584,8 @@ async fn handle_inbound_substream<S>(
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     let mut io = muxer.io(&mut substream);
-    let Some(protocol) = listener_select_optional(
-        &mut io,
-        &[
-            IDENTIFY_PROTOCOL,
-            IDENTIFY_PUSH_PROTOCOL,
-            NODE_HELLO_PROTOCOL,
-            ANNOUNCE_PROTOCOL,
-            SYNC_PROTOCOL,
-        ]
-    ).await? else {
-        info!(target: TAG, "ignoring unsupported inbound substream protocol");
+    let Some(protocol) = listener_select_optional(&mut io, INBOUND_SESSION_PROTOCOLS).await? else {
+        debug!(target: TAG, "ignoring unsupported inbound substream protocol");
         return Ok(());
     };
 
@@ -661,13 +701,7 @@ fn build_local_identify(
             addr: [0, 0, 0, 0],
             port: config.listen_port,
         }],
-        supported_protocols: vec![
-            IDENTIFY_PROTOCOL.into(),
-            IDENTIFY_PUSH_PROTOCOL.into(),
-            NODE_HELLO_PROTOCOL.into(),
-            SYNC_PROTOCOL.into(),
-            ANNOUNCE_PROTOCOL.into()
-        ],
+        supported_protocols: advertised_protocols(),
         observed_addr: None,
         transport_public_key: transport_identity.public_key_protobuf_bytes().to_vec(),
         transport_peer_id: transport_identity.peer_id_bytes().to_vec(),

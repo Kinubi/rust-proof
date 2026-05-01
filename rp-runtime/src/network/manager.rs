@@ -860,7 +860,7 @@ impl NetworkManager {
         };
 
         self.peer_by_node.remove(&node_peer);
-    self.peer_max_blocks_per_chunk.remove(&node_peer);
+        self.peer_max_blocks_per_chunk.remove(&node_peer);
         self.host_transport_peers.remove(&transport_peer);
         self.pending_node_hello.remove(&transport_peer);
         self.pending_sync_responses.remove(&node_peer);

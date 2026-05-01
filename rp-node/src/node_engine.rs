@@ -164,10 +164,7 @@ impl NodeEngine {
         actions
     }
 
-    fn continue_request(
-        request: &PendingRequest,
-        next_height: u64
-    ) -> Option<NodeAction> {
+    fn continue_request(request: &PendingRequest, next_height: u64) -> Option<NodeAction> {
         if next_height == 0 {
             return None;
         }
@@ -295,7 +292,8 @@ impl NodeEngine {
                             request.from_height,
                             request.to_height
                         );
-                        let earliest_contiguous_height = self.blockchain.earliest_contiguous_height();
+                        let earliest_contiguous_height =
+                            self.blockchain.earliest_contiguous_height();
                         let latest_height = self.blockchain.get_latest_block().height;
 
                         let highest_served_height = blocks.last().map(|block| block.height);
@@ -304,11 +302,7 @@ impl NodeEngine {
                             .unwrap_or(false);
 
                         let next_height = if let Some(height) = highest_served_height {
-                            if has_more {
-                                Some(height.saturating_add(1))
-                            } else {
-                                None
-                            }
+                            if has_more { Some(height.saturating_add(1)) } else { None }
                         } else if
                             request.from_height < earliest_contiguous_height &&
                             earliest_contiguous_height <= latest_height
@@ -756,8 +750,11 @@ mod tests {
 
         assert_eq!(engine.pending_requests.len(), 0);
         assert_eq!(actions.len(), 1);
-        let NodeAction::RequestBlocks { peer: action_peer, from_height, to_height } = actions[0]
-        else {
+        let NodeAction::RequestBlocks {
+            peer: action_peer,
+            from_height,
+            to_height,
+        } = actions[0] else {
             panic!("expected follow-up RequestBlocks action");
         };
         assert_eq!(action_peer, peer);
@@ -789,8 +786,11 @@ mod tests {
 
         assert_eq!(engine.pending_requests.len(), 0);
         assert_eq!(actions.len(), 1);
-        let NodeAction::RequestBlocks { peer: action_peer, from_height, to_height } = actions[0]
-        else {
+        let NodeAction::RequestBlocks {
+            peer: action_peer,
+            from_height,
+            to_height,
+        } = actions[0] else {
             panic!("expected paginated RequestBlocks action");
         };
         assert_eq!(action_peer, peer);

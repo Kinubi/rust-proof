@@ -4,7 +4,7 @@ use std::task::{ Context, Poll };
 
 use embassy_time::{ Duration, Timer };
 use futures::io::{ AsyncRead, AsyncWrite };
-use log::{ info, warn };
+use log::{ debug, warn };
 use socket2::{ Socket, Domain, Type, Protocol, SockAddr };
 use futures::Future;
 
@@ -240,7 +240,7 @@ impl SocketFactory for EspSocketFactory {
         addr: SockAddr
     ) -> impl Future<Output = Result<Self::TcpStream, RuntimeError>> + Send {
         async move {
-            info!(target: TAG, "connect() to {:?}", addr);
+            debug!(target: TAG, "connect() to {:?}", addr);
 
             let domain = if addr.is_ipv4() { Domain::IPV4 } else { Domain::IPV6 };
             let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP)).map_err(
@@ -251,7 +251,7 @@ impl SocketFactory for EspSocketFactory {
 
             match socket.connect(&addr) {
                 Ok(()) => {
-                    info!(target: TAG, "connected to {:?} (immediate)", addr);
+                    debug!(target: TAG, "connected to {:?} (immediate)", addr);
                 }
                 Err(e) if
                     e.kind() == ErrorKind::WouldBlock ||
@@ -276,7 +276,7 @@ impl SocketFactory for EspSocketFactory {
                             Ok(None) => {
                                 // No error, check if connected
                                 if socket.peer_addr().is_ok() {
-                                    info!(target: TAG, "connected to {:?}", addr);
+                                    debug!(target: TAG, "connected to {:?}", addr);
                                     break;
                                 }
                             }

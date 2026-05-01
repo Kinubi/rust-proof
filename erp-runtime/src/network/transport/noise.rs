@@ -2,7 +2,7 @@ use std::{ io::{ self, Error, ErrorKind }, pin::Pin, task::{ Context, Poll, read
 
 use futures::io::{ AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt };
 use libp2p_identity::PublicKey;
-use log::{ info, warn };
+use log::warn;
 use quick_protobuf::{
     BytesReader,
     MessageRead,
@@ -558,9 +558,6 @@ fn verify_remote_identity(
             RuntimeError::config("noise handshake did not expose a remote static key")
         })?;
 
-    info!(target: TAG, "verify_remote_identity: identity_key len={}, identity_sig len={}",
-        payload.identity_key.len(), payload.identity_sig.len());
-
     if payload.identity_key.is_empty() {
         return Err(
             RuntimeError::config("noise handshake payload is missing a transport public key")
@@ -571,8 +568,6 @@ fn verify_remote_identity(
             RuntimeError::config("noise handshake payload is missing a transport signature")
         );
     }
-
-    info!(target: TAG, "identity_key bytes: {:02x?}", &payload.identity_key[..payload.identity_key.len().min(64)]);
 
     let public_key = PublicKey::try_decode_protobuf(&payload.identity_key).map_err(|e| {
         warn!(target: TAG, "try_decode_protobuf failed: {:?}", e);

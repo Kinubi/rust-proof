@@ -1,7 +1,7 @@
 use std::io::{ Error, ErrorKind };
 
 use futures::io::{ AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt };
-use log::info;
+use log::debug;
 use unsigned_varint::{ decode, encode };
 
 use crate::runtime::errors::RuntimeError;
@@ -76,20 +76,20 @@ pub async fn read_protocol<S>(stream: &mut S, max_len: usize) -> Result<String, 
 pub async fn dialer_select<S>(stream: &mut S, protocol: &str) -> Result<(), RuntimeError>
     where S: AsyncRead + AsyncWrite + Unpin
 {
-    info!(target: TAG, "dialer_select: sending multistream header");
+    debug!(target: TAG, "dialer_select: sending multistream header");
     write_protocol(stream, MULTISTREAM_V1).await?;
-    info!(target: TAG, "dialer_select: waiting for remote header");
+    debug!(target: TAG, "dialer_select: waiting for remote header");
     let remote_header = read_protocol(stream, MAX_PROTOCOL_FRAME_LEN).await?;
-    info!(target: TAG, "dialer_select: remote header = {:?}", remote_header);
+    debug!(target: TAG, "dialer_select: remote header = {:?}", remote_header);
     if remote_header != MULTISTREAM_V1 {
         return Err(RuntimeError::config("remote did not acknowledge multistream v1"));
     }
 
-    info!(target: TAG, "dialer_select: sending protocol {:?}", protocol);
+    debug!(target: TAG, "dialer_select: sending protocol {:?}", protocol);
     write_protocol(stream, protocol).await?;
-    info!(target: TAG, "dialer_select: waiting for protocol selection");
+    debug!(target: TAG, "dialer_select: waiting for protocol selection");
     let selected = read_protocol(stream, MAX_PROTOCOL_FRAME_LEN).await?;
-    info!(target: TAG, "dialer_select: selected = {:?}", selected);
+    debug!(target: TAG, "dialer_select: selected = {:?}", selected);
     if selected == protocol {
         return Ok(());
     }
@@ -116,26 +116,26 @@ pub async fn listener_select_optional<S>(
 ) -> Result<Option<String>, RuntimeError>
     where S: AsyncRead + AsyncWrite + Unpin
 {
-    info!(target: TAG, "listener_select: waiting for remote header");
+    debug!(target: TAG, "listener_select: waiting for remote header");
     let remote_header = read_protocol(stream, MAX_PROTOCOL_FRAME_LEN).await?;
-    info!(target: TAG, "listener_select: remote header = {:?}", remote_header);
+    debug!(target: TAG, "listener_select: remote header = {:?}", remote_header);
     if remote_header != MULTISTREAM_V1 {
         return Err(RuntimeError::config("remote did not initiate multistream v1 negotiation"));
     }
 
-    info!(target: TAG, "listener_select: sending multistream header");
+    debug!(target: TAG, "listener_select: sending multistream header");
     write_protocol(stream, MULTISTREAM_V1).await?;
-    info!(target: TAG, "listener_select: waiting for protocol request");
+    debug!(target: TAG, "listener_select: waiting for protocol request");
     let requested = read_protocol(stream, MAX_PROTOCOL_FRAME_LEN).await?;
-    info!(target: TAG, "listener_select: requested protocol = {:?}, supported = {:?}", requested, supported);
+    debug!(target: TAG, "listener_select: requested protocol = {:?}, supported = {:?}", requested, supported);
 
     if supported.iter().any(|candidate| *candidate == requested) {
-        info!(target: TAG, "listener_select: accepting protocol {:?}", requested);
+        debug!(target: TAG, "listener_select: accepting protocol {:?}", requested);
         write_protocol(stream, &requested).await?;
         return Ok(Some(requested));
     }
 
-    info!(target: TAG, "listener_select: rejecting protocol {:?}", requested);
+    debug!(target: TAG, "listener_select: rejecting protocol {:?}", requested);
     write_protocol(stream, MULTISTREAM_NOT_AVAILABLE).await?;
     Ok(None)
 }

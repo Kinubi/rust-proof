@@ -2,7 +2,7 @@ use std::{ collections::VecDeque, io, io::ErrorKind, pin::Pin, task::{ Context, 
 
 use futures::future::poll_fn;
 use futures::io::{ AsyncRead, AsyncWrite };
-use log::info;
+use log::debug;
 use yamux::{ Connection, Mode, Stream };
 
 use crate::{
@@ -30,21 +30,21 @@ pub struct YamuxStreamIo<'a, S> {
 
 impl<S> YamuxMuxer<S> where S: AsyncRead + AsyncWrite + Unpin {
     pub async fn open_substream(&mut self) -> Result<Stream, RuntimeError> {
-        info!(target: TAG, "opening outbound substream");
+        debug!(target: TAG, "opening outbound substream");
         let stream = poll_fn(|cx| self.connection.poll_new_outbound(cx)).await.map_err(
             map_connection_error
         )?;
-        info!(target: TAG, "outbound substream opened");
+        debug!(target: TAG, "outbound substream opened");
         Ok(stream)
     }
 
     pub async fn accept_substream(&mut self) -> Result<Option<Stream>, RuntimeError> {
         if let Some(stream) = self.pending_inbound.pop_front() {
-            info!(target: TAG, "returning queued inbound substream");
+            debug!(target: TAG, "returning queued inbound substream");
             return Ok(Some(stream));
         }
 
-        info!(target: TAG, "waiting for inbound substream");
+        debug!(target: TAG, "waiting for inbound substream");
         let result = poll_fn(|cx| {
             if let Some(stream) = self.pending_inbound.pop_front() {
                 return Poll::Ready(Ok(Some(stream)));
@@ -57,7 +57,7 @@ impl<S> YamuxMuxer<S> where S: AsyncRead + AsyncWrite + Unpin {
                 Poll::Pending => Poll::Pending,
             }
         }).await?;
-        info!(target: TAG, "inbound substream: {:?}", result.is_some());
+        debug!(target: TAG, "inbound substream: {:?}", result.is_some());
         Ok(result)
     }
 
@@ -65,13 +65,16 @@ impl<S> YamuxMuxer<S> where S: AsyncRead + AsyncWrite + Unpin {
         YamuxStreamIo { muxer: self, stream }
     }
 
+    // `yamux::Stream` does not advance the underlying connection on its own, so reads and
+    // writes on one substream must continue polling the shared connection and queue any
+    // incidental inbound streams that arrive in the meantime.
     fn poll_drive_connection(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let mut queued_stream = false;
 
         loop {
             match self.connection.poll_next_inbound(cx) {
                 Poll::Ready(Some(Ok(stream))) => {
-                    info!(target: TAG, "queued incidental inbound substream");
+                    debug!(target: TAG, "queued incidental inbound substream");
                     self.pending_inbound.push_back(stream);
                     queued_stream = true;
                 }
