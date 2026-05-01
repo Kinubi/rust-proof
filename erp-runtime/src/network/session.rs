@@ -33,7 +33,13 @@ use crate::{
                 encode_announce_request,
                 encode_announce_response,
             },
-            identify::{ IDENTIFY_PROTOCOL, IdentifyInfo, decode_identify, encode_identify },
+            identify::{
+                IDENTIFY_PROTOCOL,
+                IDENTIFY_PUSH_PROTOCOL,
+                IdentifyInfo,
+                decode_identify,
+                encode_identify,
+            },
             node_hello::{
                 NODE_HELLO_PROTOCOL,
                 NodeHello,
@@ -47,7 +53,7 @@ use crate::{
         },
         socket::esp_idf::EspTcpStream,
         transport::{
-            multistream::{ dialer_select, listener_select },
+            multistream::{ dialer_select, listener_select, listener_select_optional },
             noise::{ self, NOISE_PROTOCOL },
             yamux::{ self, YamuxMuxer },
         },
@@ -235,6 +241,7 @@ impl SessionWorker {
                     }
                     LoopEvent::Inbound(Ok(Some(substream))) => {
                         handle_inbound_substream(
+                            &mut yamux_session.muxer,
                             substream,
                             node_identity.as_ref(),
                             transport_identity.as_ref(),
@@ -280,10 +287,13 @@ async fn complete_outbound_handshake<S>(
 ) -> Result<VerifiedPeer, RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
-    // libp2p identify is push-based: the listener pushes identify to the dialer.
-    // So we need to accept an incoming substream from the peer for identify.
-    info!(target: TAG, "waiting for identify push from remote");
-    let identify = receive_identify_push(muxer, config, authenticated_transport_peer).await?;
+    // libp2p identify on /ipfs/id/1.0.0 is request/response: the opener requests identify,
+    // the listener replies with its identify payload and closes the substream.
+    info!(target: TAG, "waiting for identify request from remote");
+    serve_identify_request(muxer, config, transport_identity).await?;
+
+    info!(target: TAG, "requesting identify from remote");
+    let identify = request_identify(muxer, config, authenticated_transport_peer).await?;
     info!(target: TAG, "received identify from remote: peer_id={:?}", identify.transport_peer_id);
     if identify.transport_peer_id.as_slice() != authenticated_transport_peer {
         return Err(
@@ -321,20 +331,18 @@ async fn complete_inbound_handshake<S>(
             );
         };
 
-        let protocol = listener_select(
-            &mut substream,
-            &[IDENTIFY_PROTOCOL, NODE_HELLO_PROTOCOL]
-        ).await?;
+        let mut io = muxer.io(&mut substream);
+        let protocol = listener_select(&mut io, &[IDENTIFY_PROTOCOL, NODE_HELLO_PROTOCOL]).await?;
 
         match protocol.as_str() {
             IDENTIFY_PROTOCOL => {
-                send_identify(&mut substream, config, transport_identity).await?;
+                send_identify(&mut io, config, transport_identity).await?;
                 identify_served = true;
             }
             NODE_HELLO_PROTOCOL => {
                 verified_peer = Some(
                     answer_node_hello(
-                        &mut substream,
+                        &mut io,
                         node_identity,
                         transport_identity,
                         config,
@@ -351,31 +359,26 @@ async fn complete_inbound_handshake<S>(
     verified_peer.ok_or_else(|| RuntimeError::config("node hello handshake did not complete"))
 }
 
-/// Receive identify info pushed by the remote peer (libp2p identify push model).
-/// The listener opens a substream and sends identify info to the dialer.
-async fn receive_identify_push<S>(
+/// Serve an inbound libp2p identify request on /ipfs/id/1.0.0 by sending our identify payload.
+async fn serve_identify_request<S>(
     muxer: &mut YamuxMuxer<S>,
     config: &NetworkConfig,
-    authenticated_transport_peer: &[u8]
+    transport_identity: &TransportIdentityManager
 ) -> Result<IdentifyInfo, RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
+    info!(target: TAG, "serve_identify_request: waiting for substream");
     let Some(mut substream) = muxer.accept_substream().await? else {
-        return Err(RuntimeError::config("remote closed the connection before sending identify"));
+        return Err(RuntimeError::config("remote closed the connection before requesting identify"));
     };
+    info!(target: TAG, "serve_identify_request: got substream, starting protocol negotiation");
 
-    // Remote is dialing identify protocol on this substream
-    listener_select(&mut substream, &[IDENTIFY_PROTOCOL]).await?;
-
-    let frame = read_length_prefixed_frame(&mut substream, config.max_frame_len).await?;
-    let identify = decode_identify(&frame)?;
-    if identify.transport_peer_id.as_slice() != authenticated_transport_peer {
-        return Err(
-            RuntimeError::config(
-                "identify transport peer id did not match the authenticated transport session"
-            )
-        );
-    }
+    let mut io = muxer.io(&mut substream);
+    listener_select(&mut io, &[IDENTIFY_PROTOCOL]).await?;
+    info!(target: TAG, "serve_identify_request: protocol negotiated, sending identify frame");
+    send_identify(&mut io, config, transport_identity).await?;
+    let identify = build_local_identify(config, transport_identity);
+    info!(target: TAG, "serve_identify_request: identify sent");
     Ok(identify)
 }
 
@@ -387,8 +390,9 @@ async fn request_identify<S>(
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     let mut substream = muxer.open_substream().await?;
-    dialer_select(&mut substream, IDENTIFY_PROTOCOL).await?;
-    let frame = read_length_prefixed_frame(&mut substream, config.max_frame_len).await?;
+    let mut io = muxer.io(&mut substream);
+    dialer_select(&mut io, IDENTIFY_PROTOCOL).await?;
+    let frame = read_length_prefixed_frame(&mut io, config.max_frame_len).await?;
     let identify = decode_identify(&frame)?;
     if identify.transport_peer_id.as_slice() != authenticated_transport_peer {
         return Err(
@@ -423,14 +427,12 @@ async fn request_node_hello<S>(
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     let mut substream = muxer.open_substream().await?;
-    dialer_select(&mut substream, NODE_HELLO_PROTOCOL).await?;
+    let mut io = muxer.io(&mut substream);
+    dialer_select(&mut io, NODE_HELLO_PROTOCOL).await?;
 
     let local_hello = build_node_hello(node_identity, transport_identity, config)?;
-    write_postcard_frame(&mut substream, &local_hello, config.max_frame_len).await?;
-    let response: NodeHelloResponse = read_postcard_frame(
-        &mut substream,
-        config.max_frame_len
-    ).await?;
+    write_postcard_frame(&mut io, &local_hello, config.max_frame_len).await?;
+    let response: NodeHelloResponse = read_postcard_frame(&mut io, config.max_frame_len).await?;
     if !response.accepted {
         return Err(RuntimeError::config("remote rejected the node hello handshake"));
     }
@@ -475,15 +477,13 @@ async fn handle_outbound_frame<S>(
     match message {
         NetworkMessage::AnnounceRequest(request) => {
             let mut substream = muxer.open_substream().await?;
-            dialer_select(&mut substream, ANNOUNCE_PROTOCOL).await?;
+            let mut io = muxer.io(&mut substream);
+            dialer_select(&mut io, ANNOUNCE_PROTOCOL).await?;
             let payload = encode_announce_request(&request, config.max_frame_len)?;
-            substream.write_all(&payload).await.map_err(RuntimeError::NetworkError)?;
-            substream.flush().await.map_err(RuntimeError::NetworkError)?;
+            io.write_all(&payload).await.map_err(RuntimeError::NetworkError)?;
+            io.flush().await.map_err(RuntimeError::NetworkError)?;
 
-            let response_frame = read_length_prefixed_frame(
-                &mut substream,
-                config.max_frame_len
-            ).await?;
+            let response_frame = read_length_prefixed_frame(&mut io, config.max_frame_len).await?;
             let response = decode_announce_response(&response_frame, config.max_frame_len)?;
             event_tx
                 .send(RuntimeEvent::FrameReceived {
@@ -495,15 +495,13 @@ async fn handle_outbound_frame<S>(
         }
         NetworkMessage::SyncRequest(request) => {
             let mut substream = muxer.open_substream().await?;
-            dialer_select(&mut substream, SYNC_PROTOCOL).await?;
+            let mut io = muxer.io(&mut substream);
+            dialer_select(&mut io, SYNC_PROTOCOL).await?;
             let payload = encode_sync_request(&request, config.max_frame_len)?;
-            substream.write_all(&payload).await.map_err(RuntimeError::NetworkError)?;
-            substream.flush().await.map_err(RuntimeError::NetworkError)?;
+            io.write_all(&payload).await.map_err(RuntimeError::NetworkError)?;
+            io.flush().await.map_err(RuntimeError::NetworkError)?;
 
-            let response_frame = read_length_prefixed_frame(
-                &mut substream,
-                config.max_frame_len
-            ).await?;
+            let response_frame = read_length_prefixed_frame(&mut io, config.max_frame_len).await?;
             let response = decode_sync_response(&response_frame, config.max_frame_len)?;
             event_tx
                 .send(RuntimeEvent::FrameReceived {
@@ -524,7 +522,8 @@ async fn handle_outbound_frame<S>(
 }
 
 async fn handle_inbound_substream<S>(
-    mut substream: S,
+    muxer: &mut YamuxMuxer<S>,
+    mut substream: ::yamux::Stream,
     node_identity: &IdentityManager,
     transport_identity: &TransportIdentityManager,
     config: &NetworkConfig,
@@ -535,16 +534,31 @@ async fn handle_inbound_substream<S>(
 ) -> Result<(), RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
-    let protocol = listener_select(
-        &mut substream,
-        &[IDENTIFY_PROTOCOL, NODE_HELLO_PROTOCOL, ANNOUNCE_PROTOCOL, SYNC_PROTOCOL]
-    ).await?;
+    let mut io = muxer.io(&mut substream);
+    let Some(protocol) = listener_select_optional(
+        &mut io,
+        &[
+            IDENTIFY_PROTOCOL,
+            IDENTIFY_PUSH_PROTOCOL,
+            NODE_HELLO_PROTOCOL,
+            ANNOUNCE_PROTOCOL,
+            SYNC_PROTOCOL,
+        ]
+    ).await? else {
+        info!(target: TAG, "ignoring unsupported inbound substream protocol");
+        return Ok(());
+    };
 
     match protocol.as_str() {
-        IDENTIFY_PROTOCOL => send_identify(&mut substream, config, transport_identity).await,
+        IDENTIFY_PROTOCOL => send_identify(&mut io, config, transport_identity).await,
+        IDENTIFY_PUSH_PROTOCOL => {
+            let frame = read_length_prefixed_frame(&mut io, config.max_frame_len).await?;
+            let _ = decode_identify(&frame)?;
+            Ok(())
+        }
         NODE_HELLO_PROTOCOL => {
             let remote = answer_node_hello(
-                &mut substream,
+                &mut io,
                 node_identity,
                 transport_identity,
                 config,
@@ -558,7 +572,7 @@ async fn handle_inbound_substream<S>(
             Ok(())
         }
         ANNOUNCE_PROTOCOL => {
-            let frame = read_length_prefixed_frame(&mut substream, config.max_frame_len).await?;
+            let frame = read_length_prefixed_frame(&mut io, config.max_frame_len).await?;
             let request = decode_announce_request(&frame, config.max_frame_len)?;
             event_tx
                 .send(RuntimeEvent::FrameReceived {
@@ -569,11 +583,11 @@ async fn handle_inbound_substream<S>(
 
             let response = AnnounceResponse { accepted: true };
             let response_frame = encode_announce_response(&response, config.max_frame_len)?;
-            substream.write_all(&response_frame).await.map_err(RuntimeError::NetworkError)?;
-            substream.flush().await.map_err(RuntimeError::NetworkError)
+            io.write_all(&response_frame).await.map_err(RuntimeError::NetworkError)?;
+            io.flush().await.map_err(RuntimeError::NetworkError)
         }
         SYNC_PROTOCOL => {
-            let frame = read_length_prefixed_frame(&mut substream, config.max_frame_len).await?;
+            let frame = read_length_prefixed_frame(&mut io, config.max_frame_len).await?;
             let request = decode_sync_request(&frame, config.max_frame_len)?;
             event_tx
                 .send(RuntimeEvent::FrameReceived {
@@ -587,8 +601,8 @@ async fn handle_inbound_substream<S>(
                 &response,
                 config.max_frame_len
             )?;
-            substream.write_all(&response_frame).await.map_err(RuntimeError::NetworkError)?;
-            substream.flush().await.map_err(RuntimeError::NetworkError)
+            io.write_all(&response_frame).await.map_err(RuntimeError::NetworkError)?;
+            io.flush().await.map_err(RuntimeError::NetworkError)
         }
         _ => Err(RuntimeError::config("unsupported inbound protocol")),
     }
@@ -649,6 +663,7 @@ fn build_local_identify(
         }],
         supported_protocols: vec![
             IDENTIFY_PROTOCOL.into(),
+            IDENTIFY_PUSH_PROTOCOL.into(),
             NODE_HELLO_PROTOCOL.into(),
             SYNC_PROTOCOL.into(),
             ANNOUNCE_PROTOCOL.into()

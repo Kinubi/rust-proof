@@ -164,6 +164,28 @@ impl NodeEngine {
         actions
     }
 
+    fn continue_request(
+        request: &PendingRequest,
+        next_height: u64
+    ) -> Option<NodeAction> {
+        if next_height == 0 {
+            return None;
+        }
+
+        let next_to_height = if next_height <= request.to_height {
+            request.to_height
+        } else {
+            let span = request.to_height.saturating_sub(request.from_height);
+            next_height.saturating_add(span)
+        };
+
+        Some(NodeAction::RequestBlocks {
+            peer: request.peer,
+            from_height: next_height,
+            to_height: next_to_height,
+        })
+    }
+
     fn ingest_block(&mut self, peer: PeerId, block: Block) -> Vec<NodeAction> {
         if self.blockchain.head_hash == block.previous_hash {
             let parent_state = self.blockchain.state.clone();
@@ -223,9 +245,19 @@ impl NodeEngine {
                     connected: true,
                     last_seen_ms: 0,
                 });
-                vec![NodeAction::ReportEvent {
-                    message: "peer connected",
-                }]
+
+                // Request blocks from the new peer starting after our current head
+                let local_height = self.blockchain.get_latest_block().height;
+                vec![
+                    NodeAction::ReportEvent {
+                        message: "peer connected",
+                    },
+                    NodeAction::RequestBlocks {
+                        peer,
+                        from_height: local_height.saturating_add(1),
+                        to_height: local_height.saturating_add(100),
+                    }
+                ]
             }
 
             NodeInput::PeerDisconnected { peer } => {
@@ -263,32 +295,58 @@ impl NodeEngine {
                             request.from_height,
                             request.to_height
                         );
+                        let earliest_contiguous_height = self.blockchain.earliest_contiguous_height();
+                        let latest_height = self.blockchain.get_latest_block().height;
 
                         let highest_served_height = blocks.last().map(|block| block.height);
                         let has_more = highest_served_height
                             .map(|height| height < self.blockchain.get_latest_block().height)
                             .unwrap_or(false);
 
+                        let next_height = if let Some(height) = highest_served_height {
+                            if has_more {
+                                Some(height.saturating_add(1))
+                            } else {
+                                None
+                            }
+                        } else if
+                            request.from_height < earliest_contiguous_height &&
+                            earliest_contiguous_height <= latest_height
+                        {
+                            Some(earliest_contiguous_height)
+                        } else {
+                            None
+                        };
+
                         vec![NodeAction::SendFrame {
                             peer,
                             frame: NetworkMessage::SyncResponse(SyncResponse {
                                 blocks,
                                 has_more,
-                                next_height: if has_more {
-                                    highest_served_height.map(|height| height.saturating_add(1))
-                                } else {
-                                    None
-                                },
+                                next_height,
                             }).to_bytes(),
                         }]
                     }
                     NetworkMessage::SyncResponse(response) => {
                         let mut actions = Vec::new();
 
+                        let completed_requests = self.pending_requests
+                            .iter()
+                            .filter(|request| request.peer == peer)
+                            .cloned()
+                            .collect::<Vec<_>>();
                         self.pending_requests.retain(|request| request.peer != peer);
 
                         for block in response.blocks {
                             actions.extend(self.ingest_block(peer, block));
+                        }
+
+                        if let Some(next_height) = response.next_height {
+                            for request in &completed_requests {
+                                if let Some(action) = Self::continue_request(request, next_height) {
+                                    actions.push(action);
+                                }
+                            }
                         }
 
                         if actions.is_empty() {
@@ -671,7 +729,73 @@ mod tests {
 
         assert!(response.blocks.is_empty());
         assert!(!response.has_more);
-        assert_eq!(response.next_height, None);
+        assert_eq!(response.next_height, Some(5));
+    }
+
+    #[test]
+    fn test_empty_sync_response_with_next_height_requests_available_window() {
+        let peer = [11u8; 32];
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+
+        let request_actions = engine.step(NodeInput::ImportRequested {
+            peer,
+            from_height: 1,
+            to_height: 100,
+        });
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert!(matches!(&request_actions[0], NodeAction::RequestBlocks { .. }));
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::SyncResponse(SyncResponse {
+                blocks: vec![],
+                has_more: false,
+                next_height: Some(350),
+            }).to_bytes(),
+        });
+
+        assert_eq!(engine.pending_requests.len(), 0);
+        assert_eq!(actions.len(), 1);
+        let NodeAction::RequestBlocks { peer: action_peer, from_height, to_height } = actions[0]
+        else {
+            panic!("expected follow-up RequestBlocks action");
+        };
+        assert_eq!(action_peer, peer);
+        assert_eq!(from_height, 350);
+        assert_eq!(to_height, 449);
+    }
+
+    #[test]
+    fn test_sync_response_with_more_blocks_requests_next_page() {
+        let peer = [12u8; 32];
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+
+        let request_actions = engine.step(NodeInput::ImportRequested {
+            peer,
+            from_height: 1,
+            to_height: 100,
+        });
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert!(matches!(&request_actions[0], NodeAction::RequestBlocks { .. }));
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::SyncResponse(SyncResponse {
+                blocks: vec![],
+                has_more: true,
+                next_height: Some(33),
+            }).to_bytes(),
+        });
+
+        assert_eq!(engine.pending_requests.len(), 0);
+        assert_eq!(actions.len(), 1);
+        let NodeAction::RequestBlocks { peer: action_peer, from_height, to_height } = actions[0]
+        else {
+            panic!("expected paginated RequestBlocks action");
+        };
+        assert_eq!(action_peer, peer);
+        assert_eq!(from_height, 33);
+        assert_eq!(to_height, 100);
     }
 
     #[test]

@@ -42,6 +42,8 @@ pub struct NoiseStream<S> {
     read_plaintext_pos: usize,
     write_frame: Vec<u8>,
     write_frame_pos: usize,
+    /// Number of plaintext bytes consumed but not yet flushed
+    write_pending_consumed: usize,
 }
 
 impl<S> NoiseStream<S> {
@@ -58,6 +60,7 @@ impl<S> NoiseStream<S> {
             read_plaintext_pos: 0,
             write_frame: Vec::new(),
             write_frame_pos: 0,
+            write_pending_consumed: 0,
         }
     }
 
@@ -180,22 +183,39 @@ impl<S> NoiseStream<S> {
         where S: AsyncWrite + Unpin
     {
         while self.write_frame_pos < self.write_frame.len() {
-            let written = ready!(
+            match
                 Pin::new(&mut self.inner).poll_write(cx, &self.write_frame[self.write_frame_pos..])
-            )?;
-
-            if written == 0 {
-                return Poll::Ready(
-                    Err(Error::new(ErrorKind::WriteZero, "failed to flush buffered noise frame"))
-                );
+            {
+                Poll::Ready(Ok(0)) => {
+                    return Poll::Ready(
+                        Err(
+                            Error::new(ErrorKind::WriteZero, "failed to flush buffered noise frame")
+                        )
+                    );
+                }
+                Poll::Ready(Ok(written)) => {
+                    self.write_frame_pos += written;
+                }
+                Poll::Ready(Err(e)) => {
+                    return Poll::Ready(Err(e));
+                }
+                Poll::Pending => {
+                    // Socket not ready - will be woken when it is
+                    return Poll::Pending;
+                }
             }
-
-            self.write_frame_pos += written;
         }
 
-        self.write_frame.clear();
-        self.write_frame_pos = 0;
-        Poll::Ready(Ok(()))
+        // Frame fully written, now flush the underlying stream
+        match Pin::new(&mut self.inner).poll_flush(cx) {
+            Poll::Ready(Ok(())) => {
+                self.write_frame.clear();
+                self.write_frame_pos = 0;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(e)) => Poll::Ready(Err(e)),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -233,6 +253,26 @@ impl<S> AsyncWrite for NoiseStream<S> where S: AsyncWrite + Unpin {
         cx: &mut Context<'_>,
         buf: &[u8]
     ) -> Poll<io::Result<usize>> {
+        // If we have pending data from a previous incomplete write, flush it first
+        if self.write_pending_consumed > 0 {
+            match self.poll_flush_pending_frame(cx) {
+                Poll::Ready(Ok(())) => {
+                    // Successfully flushed - return the consumed bytes from before
+                    let consumed = self.write_pending_consumed;
+                    self.write_pending_consumed = 0;
+                    return Poll::Ready(Ok(consumed));
+                }
+                Poll::Ready(Err(error)) => {
+                    self.write_pending_consumed = 0;
+                    return Poll::Ready(Err(error));
+                }
+                Poll::Pending => {
+                    return Poll::Pending;
+                }
+            }
+        }
+
+        // Flush any existing frame (shouldn't happen if write_pending_consumed tracking is correct)
         if !self.write_frame.is_empty() {
             match self.poll_flush_pending_frame(cx) {
                 Poll::Ready(Ok(())) => {}
@@ -249,10 +289,18 @@ impl<S> AsyncWrite for NoiseStream<S> where S: AsyncWrite + Unpin {
             return Poll::Ready(Ok(0));
         }
 
+        // Queue the new encrypted frame
         let consumed = self.queue_encrypted_frame(buf)?;
+
+        // Try to flush the frame
         match self.poll_flush_pending_frame(cx) {
-            Poll::Ready(Ok(())) | Poll::Pending => Poll::Ready(Ok(consumed)),
-            Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
+            Poll::Ready(Ok(())) => { Poll::Ready(Ok(consumed)) }
+            Poll::Ready(Err(error)) => { Poll::Ready(Err(error)) }
+            Poll::Pending => {
+                // Couldn't flush yet - track consumed bytes for when we're called again
+                self.write_pending_consumed = consumed;
+                Poll::Pending
+            }
         }
     }
 

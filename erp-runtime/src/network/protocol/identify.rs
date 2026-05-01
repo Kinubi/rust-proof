@@ -14,6 +14,7 @@ use crate::{
 };
 
 pub const IDENTIFY_PROTOCOL: &str = "/ipfs/id/1.0.0";
+pub const IDENTIFY_PUSH_PROTOCOL: &str = "/ipfs/id/push/1.0.0";
 const MAX_IDENTIFY_MESSAGE_SIZE: u32 = 4096;
 
 #[derive(Debug, Clone)]

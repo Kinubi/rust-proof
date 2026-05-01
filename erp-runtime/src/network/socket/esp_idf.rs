@@ -26,6 +26,9 @@ pub struct EspTcpListener {
 
 pub struct EspTcpStream {
     socket: Socket,
+    read_retry: Option<Timer>,
+    write_retry: Option<Timer>,
+    flush_retry: Option<Timer>,
 }
 
 impl EspTcpStream {
@@ -44,6 +47,20 @@ impl EspTcpStream {
     pub fn shutdown(&mut self) -> Result<(), RuntimeError> {
         self.socket.shutdown(std::net::Shutdown::Both).map_err(RuntimeError::NetworkError)
     }
+
+    fn poll_retry(timer: &mut Option<Timer>, cx: &mut Context<'_>) -> Poll<()> {
+        let retry = timer.get_or_insert_with(|| {
+            Timer::after(Duration::from_millis(SOCKET_RETRY_DELAY_MS))
+        });
+
+        match Pin::new(retry).poll(cx) {
+            Poll::Ready(()) => {
+                *timer = None;
+                Poll::Ready(())
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 /// Check if error means "try again later" - handles both WouldBlock and lwIP's EINPROGRESS
@@ -57,15 +74,27 @@ impl AsyncRead for EspTcpStream {
         cx: &mut Context<'_>,
         buf: &mut [u8]
     ) -> Poll<std::io::Result<usize>> {
-        // socket2::Socket implements std::io::Read
-        match (&mut self.socket).read(buf) {
-            Ok(n) => Poll::Ready(Ok(n)),
-            Err(e) if is_would_block(&e) => {
-                // Schedule a wake and return Pending
-                cx.waker().wake_by_ref();
-                Poll::Pending
+        loop {
+            match (&mut self.socket).read(buf) {
+                Ok(n) => {
+                    self.read_retry = None;
+                    return Poll::Ready(Ok(n));
+                }
+                Err(e) if is_would_block(&e) => {
+                    match Self::poll_retry(&mut self.read_retry, cx) {
+                        Poll::Ready(()) => {
+                            continue;
+                        }
+                        Poll::Pending => {
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.read_retry = None;
+                    return Poll::Ready(Err(e));
+                }
             }
-            Err(e) => Poll::Ready(Err(e)),
         }
     }
 }
@@ -76,24 +105,52 @@ impl AsyncWrite for EspTcpStream {
         cx: &mut Context<'_>,
         buf: &[u8]
     ) -> Poll<std::io::Result<usize>> {
-        match (&mut self.socket).write(buf) {
-            Ok(n) => Poll::Ready(Ok(n)),
-            Err(e) if is_would_block(&e) => {
-                cx.waker().wake_by_ref();
-                Poll::Pending
+        loop {
+            match (&mut self.socket).write(buf) {
+                Ok(n) => {
+                    self.write_retry = None;
+                    return Poll::Ready(Ok(n));
+                }
+                Err(e) if is_would_block(&e) => {
+                    match Self::poll_retry(&mut self.write_retry, cx) {
+                        Poll::Ready(()) => {
+                            continue;
+                        }
+                        Poll::Pending => {
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.write_retry = None;
+                    return Poll::Ready(Err(e));
+                }
             }
-            Err(e) => Poll::Ready(Err(e)),
         }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
-        match (&mut self.socket).flush() {
-            Ok(()) => Poll::Ready(Ok(())),
-            Err(e) if is_would_block(&e) => {
-                cx.waker().wake_by_ref();
-                Poll::Pending
+        loop {
+            match (&mut self.socket).flush() {
+                Ok(()) => {
+                    self.flush_retry = None;
+                    return Poll::Ready(Ok(()));
+                }
+                Err(e) if is_would_block(&e) => {
+                    match Self::poll_retry(&mut self.flush_retry, cx) {
+                        Poll::Ready(()) => {
+                            continue;
+                        }
+                        Poll::Pending => {
+                            return Poll::Pending;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.flush_retry = None;
+                    return Poll::Ready(Err(e));
+                }
             }
-            Err(e) => Poll::Ready(Err(e)),
         }
     }
 
@@ -155,7 +212,17 @@ impl SocketFactory for EspSocketFactory {
                 match listener.socket.accept() {
                     Ok((socket, addr)) => {
                         socket.set_nonblocking(true).map_err(RuntimeError::NetworkError)?;
-                        return Ok((EspTcpStream { socket }, addr));
+                        // Disable Nagle's algorithm to send small packets immediately
+                        socket.set_nodelay(true).map_err(RuntimeError::NetworkError)?;
+                        return Ok((
+                            EspTcpStream {
+                                socket,
+                                read_retry: None,
+                                write_retry: None,
+                                flush_retry: None,
+                            },
+                            addr,
+                        ));
                     }
                     Err(error) if error.kind() == ErrorKind::WouldBlock => {
                         Timer::after(Duration::from_millis(SOCKET_RETRY_DELAY_MS)).await;
@@ -241,8 +308,16 @@ impl SocketFactory for EspSocketFactory {
                 return Err(RuntimeError::NetworkError(err));
             }
 
+            // Disable Nagle's algorithm to send small packets immediately
+            socket.set_nodelay(true).map_err(RuntimeError::NetworkError)?;
+
             // Keep socket non-blocking for async I/O
-            Ok(EspTcpStream { socket })
+            Ok(EspTcpStream {
+                socket,
+                read_retry: None,
+                write_retry: None,
+                flush_retry: None,
+            })
         }
     }
 }

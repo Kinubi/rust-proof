@@ -58,9 +58,9 @@ use crate::runtime::{
 const TAG: &str = "network";
 const DEFAULT_LISTEN_ADDR: &str = "/ip4/0.0.0.0/tcp/4001";
 const DEFAULT_MAX_FRAME_LEN: u32 = 64 * 1024;
-const DEFAULT_MAX_BLOCKS_PER_CHUNK: u16 = 32;
+const DEFAULT_MAX_BLOCKS_PER_CHUNK: u16 = 8;
 const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 10;
-const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 30;
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 const GOSSIPSUB_ANNOUNCE_TOPIC: &str = "rust-proof/announce";
 const NODE_IDENTITY_FILE: &str = "node_identity.bin";
 const TRANSPORT_IDENTITY_FILE: &str = "transport_identity.bin";
@@ -242,6 +242,7 @@ struct NodeHelloTranscript<'a> {
 #[derive(Debug, Clone)]
 struct VerifiedPeer {
     node_peer_id: NodePeerId,
+    max_blocks_per_chunk: u16,
 }
 
 struct NodeHelloVerifier;
@@ -295,6 +296,7 @@ impl NodeHelloVerifier {
 
         Ok(VerifiedPeer {
             node_peer_id: remote.node_peer_id,
+            max_blocks_per_chunk: remote.max_blocks_per_chunk,
         })
     }
 }
@@ -328,7 +330,9 @@ pub struct NetworkManager {
     announce_topic: gossipsub::IdentTopic,
     peer_by_node: HashMap<NodePeerId, PeerId>,
     node_by_transport: HashMap<PeerId, NodePeerId>,
+    peer_max_blocks_per_chunk: HashMap<NodePeerId, u16>,
     host_transport_peers: HashSet<PeerId>,
+    pending_node_hello: HashSet<PeerId>,
     pending_sync_responses: HashMap<NodePeerId, VecDeque<ResponseChannel<SyncResponse>>>,
     outbound_sync_requests: HashMap<OutboundRequestId, NodePeerId>,
 }
@@ -370,7 +374,9 @@ impl NetworkManager {
             announce_topic,
             peer_by_node: HashMap::new(),
             node_by_transport: HashMap::new(),
+            peer_max_blocks_per_chunk: HashMap::new(),
             host_transport_peers: HashSet::new(),
+            pending_node_hello: HashSet::new(),
             pending_sync_responses: HashMap::new(),
             outbound_sync_requests: HashMap::new(),
         })
@@ -478,9 +484,25 @@ impl NetworkManager {
             return Ok(());
         };
 
+        let request = self.clamp_sync_request(peer, request);
         let request_id = self.swarm.behaviour_mut().sync.send_request(&transport_peer, request);
         self.outbound_sync_requests.insert(request_id, peer);
         Ok(())
+    }
+
+    fn clamp_sync_request(&self, peer: NodePeerId, request: SyncRequest) -> SyncRequest {
+        let Some(limit) = self.peer_max_blocks_per_chunk.get(&peer).copied() else {
+            return request;
+        };
+        if limit == 0 || request.from_height > request.to_height {
+            return request;
+        }
+
+        let max_to_height = request.from_height.saturating_add((limit as u64).saturating_sub(1));
+        SyncRequest {
+            from_height: request.from_height,
+            to_height: request.to_height.min(max_to_height),
+        }
     }
 
     fn send_sync_response(
@@ -531,8 +553,7 @@ impl NetworkManager {
                     matches!(endpoint, ConnectedPoint::Dialer { .. }) &&
                     !self.node_by_transport.contains_key(&peer_id)
                 {
-                    let hello = self.build_local_node_hello()?;
-                    self.swarm.behaviour_mut().node_hello.send_request(&peer_id, hello);
+                    self.pending_node_hello.insert(peer_id);
                 }
             }
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -579,6 +600,14 @@ impl NetworkManager {
                     self.host_transport_peers.insert(peer_id);
                 } else {
                     self.host_transport_peers.remove(&peer_id);
+                }
+
+                if
+                    self.pending_node_hello.remove(&peer_id) &&
+                    !self.node_by_transport.contains_key(&peer_id)
+                {
+                    let hello = self.build_local_node_hello()?;
+                    self.swarm.behaviour_mut().node_hello.send_request(&peer_id, hello);
                 }
 
                 debug!(target: TAG, "identify received from {peer_id}: agent={}", info.agent_version);
@@ -797,6 +826,7 @@ impl NetworkManager {
         let node_peer = verified.node_peer_id;
         let previous_transport = self.peer_by_node.insert(node_peer, transport_peer);
         let previous_node = self.node_by_transport.insert(transport_peer, node_peer);
+        self.peer_max_blocks_per_chunk.insert(node_peer, verified.max_blocks_per_chunk);
 
         if let Some(previous_transport) = previous_transport {
             if previous_transport != transport_peer {
@@ -830,7 +860,9 @@ impl NetworkManager {
         };
 
         self.peer_by_node.remove(&node_peer);
+    self.peer_max_blocks_per_chunk.remove(&node_peer);
         self.host_transport_peers.remove(&transport_peer);
+        self.pending_node_hello.remove(&transport_peer);
         self.pending_sync_responses.remove(&node_peer);
         self.outbound_sync_requests.retain(|_, pending_peer| *pending_peer != node_peer);
 

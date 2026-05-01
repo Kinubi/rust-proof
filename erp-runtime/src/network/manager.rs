@@ -39,7 +39,7 @@ const DEFAULT_LISTEN_PORT: u16 = 4001;
 const DEFAULT_MAX_PEERS: usize = 16;
 const DEFAULT_MAX_OUTBOUND_DIALS: usize = 4;
 const DEFAULT_MAX_FRAME_LEN: u32 = 64 * 1024;
-const DEFAULT_MAX_BLOCKS_PER_CHUNK: u16 = 32;
+const DEFAULT_MAX_BLOCKS_PER_CHUNK: u16 = 8;
 const DEFAULT_IDLE_TIMEOUT_MS: u64 = 60_000;
 const BOOTSTRAP_RETRY_MS: u64 = 10_000;
 const SESSION_THREAD_STACK_SIZE: usize = 96 * 1024;
@@ -198,12 +198,33 @@ impl NetworkManager {
             }
             NetworkCommand::DisconnectPeer { peer } => self.disconnect_peer(peer).await,
             NetworkCommand::RequestBlocks { peer, from_height, to_height } => {
-                let frame = NetworkMessage::SyncRequest(SyncRequest {
-                    from_height,
-                    to_height,
-                }).to_bytes();
+                let frame = NetworkMessage::SyncRequest(
+                    self.clamp_sync_request(peer, SyncRequest {
+                        from_height,
+                        to_height,
+                    })
+                ).to_bytes();
                 self.send_frame_to_peer(peer, frame).await
             }
+        }
+    }
+
+    fn clamp_sync_request(&self, peer: PeerId, request: SyncRequest) -> SyncRequest {
+        let Some(session_id) = self.peers.session_for_node(&peer) else {
+            return request;
+        };
+        let Some(session) = self.peers.get(session_id) else {
+            return request;
+        };
+        let limit = session.max_blocks_per_chunk;
+        if limit == 0 || request.from_height > request.to_height {
+            return request;
+        }
+
+        let max_to_height = request.from_height.saturating_add((limit as u64).saturating_sub(1));
+        SyncRequest {
+            from_height: request.from_height,
+            to_height: request.to_height.min(max_to_height),
         }
     }
 

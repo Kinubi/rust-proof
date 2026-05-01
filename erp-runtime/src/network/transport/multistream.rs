@@ -1,7 +1,7 @@
 use std::io::{ Error, ErrorKind };
 
 use futures::io::{ AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt };
-use log::{ info, warn };
+use log::info;
 use unsigned_varint::{ decode, encode };
 
 use crate::runtime::errors::RuntimeError;
@@ -104,21 +104,40 @@ pub async fn dialer_select<S>(stream: &mut S, protocol: &str) -> Result<(), Runt
 pub async fn listener_select<S>(stream: &mut S, supported: &[&str]) -> Result<String, RuntimeError>
     where S: AsyncRead + AsyncWrite + Unpin
 {
+    match listener_select_optional(stream, supported).await? {
+        Some(protocol) => Ok(protocol),
+        None => Err(RuntimeError::config("requested protocol is not supported by the listener")),
+    }
+}
+
+pub async fn listener_select_optional<S>(
+    stream: &mut S,
+    supported: &[&str]
+) -> Result<Option<String>, RuntimeError>
+    where S: AsyncRead + AsyncWrite + Unpin
+{
+    info!(target: TAG, "listener_select: waiting for remote header");
     let remote_header = read_protocol(stream, MAX_PROTOCOL_FRAME_LEN).await?;
+    info!(target: TAG, "listener_select: remote header = {:?}", remote_header);
     if remote_header != MULTISTREAM_V1 {
         return Err(RuntimeError::config("remote did not initiate multistream v1 negotiation"));
     }
 
+    info!(target: TAG, "listener_select: sending multistream header");
     write_protocol(stream, MULTISTREAM_V1).await?;
+    info!(target: TAG, "listener_select: waiting for protocol request");
     let requested = read_protocol(stream, MAX_PROTOCOL_FRAME_LEN).await?;
+    info!(target: TAG, "listener_select: requested protocol = {:?}, supported = {:?}", requested, supported);
 
     if supported.iter().any(|candidate| *candidate == requested) {
+        info!(target: TAG, "listener_select: accepting protocol {:?}", requested);
         write_protocol(stream, &requested).await?;
-        return Ok(requested);
+        return Ok(Some(requested));
     }
 
+    info!(target: TAG, "listener_select: rejecting protocol {:?}", requested);
     write_protocol(stream, MULTISTREAM_NOT_AVAILABLE).await?;
-    Err(RuntimeError::config("requested protocol is not supported by the listener"))
+    Ok(None)
 }
 
 async fn read_length<S>(stream: &mut S) -> Result<usize, RuntimeError> where S: AsyncRead + Unpin {
