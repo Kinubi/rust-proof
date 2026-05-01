@@ -75,7 +75,9 @@ pub fn run() -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn create_wifi(nvs_partition: EspDefaultNvsPartition) -> Result<AsyncWifi<EspWifi<'static>>, RuntimeError> {
+fn create_wifi(
+    nvs_partition: EspDefaultNvsPartition
+) -> Result<AsyncWifi<EspWifi<'static>>, RuntimeError> {
     let ssid = option_env!("WIFI_SSID").ok_or(RuntimeError::config(WIFI_SSID_MISSING))?;
     let password = option_env!("WIFI_PASS").ok_or(RuntimeError::config(WIFI_PASS_MISSING))?;
 
@@ -84,7 +86,9 @@ fn create_wifi(nvs_partition: EspDefaultNvsPartition) -> Result<AsyncWifi<EspWif
     let timer_service = EspTaskTimerService::new().map_err(RuntimeError::esp)?;
 
     let mut wifi = AsyncWifi::wrap(
-        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs_partition)).map_err(RuntimeError::esp)?,
+        EspWifi::new(peripherals.modem, sys_loop.clone(), Some(nvs_partition)).map_err(
+            RuntimeError::esp
+        )?,
         sys_loop,
         timer_service
     ).map_err(RuntimeError::esp)?;
