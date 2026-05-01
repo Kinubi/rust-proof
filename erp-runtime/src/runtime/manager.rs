@@ -107,7 +107,11 @@ impl NodeManager {
             .map_err(RuntimeError::storage_send)?;
 
         loop {
-            let actions = match self.event_rx.next().await.unwrap() {
+            let Some(event) = self.event_rx.next().await else {
+                return Ok(());
+            };
+
+            let actions = match event {
                 RuntimeEvent::LatestSnapshotLoaded { block, state_bytes } => {
                     self.node_engine.restore_latest_snapshot(block, state_bytes)
                 }

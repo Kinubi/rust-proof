@@ -6,7 +6,7 @@ use socket2::{ Domain, Protocol, SockAddr, Socket, Type };
 
 use crate::{ network::socket::traits::SocketFactory, runtime::errors::RuntimeError };
 
-const SOCKET_RETRY_DELAY_MS: u64 = 150;
+const SOCKET_RETRY_DELAY_MS: u64 = 10;
 
 // The Wi-Fi/netif stack is owned by connection bring-up, not by each socket.
 pub struct EspSocketFactory {

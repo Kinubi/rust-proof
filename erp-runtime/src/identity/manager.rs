@@ -12,6 +12,7 @@ use rp_core::{
     traits::Hashable,
 };
 use rp_node::{ contract::{ Identity, PeerId }, errors::ContractError };
+use sha2::{ Digest, Sha256 };
 
 use crate::runtime::errors::RuntimeError;
 
@@ -164,7 +165,7 @@ impl Identity for IdentityManager {
         let signature = match &self.backend {
             IdentityBackend::Software(signing_key) => signing_key.sign(message),
             IdentityBackend::Efuse { key_block } => {
-                sign_hash_with_psa(message, *key_block).map_err(|_| ContractError::Identity)?
+                sign_message_with_psa(message, *key_block).map_err(|_| ContractError::Identity)?
             }
         };
 
@@ -222,11 +223,13 @@ fn load_verifying_key_from_efuse(
     }
 }
 
-fn sign_hash_with_psa(
-    hash: &[u8],
+fn sign_message_with_psa(
+    message: &[u8],
     efuse_block: sys::esp_efuse_block_t
 ) -> Result<Signature, &'static str> {
     let key = import_psa_opaque_key(efuse_block)?;
+    let message_digest = Sha256::digest(message);
+    let message_digest = &message_digest[..];
 
     unsafe {
         let mut signature_bytes = [0u8; 64];
@@ -236,8 +239,8 @@ fn sign_hash_with_psa(
             sys::psa_sign_hash(
                 key.id,
                 psa_alg_ecdsa(PSA_ALG_SHA_256),
-                hash.as_ptr(),
-                hash.len(),
+                message_digest.as_ptr(),
+                message_digest.len(),
                 signature_bytes.as_mut_ptr(),
                 signature_bytes.len(),
                 &mut signature_len
@@ -323,7 +326,7 @@ mod tests {
     fn sign_returns_signature_for_verifying_key() {
         let signing_key = signing_key_from_bytes(&[9u8; 32]).unwrap();
         let manager = IdentityManager::new(signing_key);
-        let message = b"embedded identity";
+        let message = b"embedded identity transcript for noise that is longer than thirty-two bytes";
 
         let signature_bytes = manager.sign(message).unwrap();
         let signature = Signature::from_slice(&signature_bytes).unwrap();

@@ -17,7 +17,11 @@ impl StorageManager {
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
         loop {
-            match self.storage_rx.next().await.unwrap() {
+            let Some(command) = self.storage_rx.next().await else {
+                return Ok(());
+            };
+
+            match command {
                 StorageCommand::LoadLatestSnapshot => {
                     let latest_snapshot = self.storage
                         .load_latest_snapshot_bundle()

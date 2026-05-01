@@ -123,13 +123,25 @@ impl State {
         if self.stakes.is_empty() {
             return None;
         }
-        let total_stake: u64 = self.stakes.values().sum();
+
+        let valid_stakes = self.stakes
+            .iter()
+            .filter_map(|(key_bytes, stake)| {
+                verifying_key_from_bytes(key_bytes).ok().map(|verifying_key| (*stake, verifying_key))
+            })
+            .collect::<Vec<_>>();
+
+        let total_stake: u64 = valid_stakes.iter().map(|(stake, _)| *stake).sum();
+        if total_stake == 0 {
+            return None;
+        }
+
         let winning_ticket = next_block_height % total_stake;
         let mut cumulative_stake = 0;
-        for (key_bytes, stake) in &self.stakes {
-            cumulative_stake += *stake;
+        for (stake, verifying_key) in valid_stakes {
+            cumulative_stake += stake;
             if winning_ticket < cumulative_stake {
-                return Some(verifying_key_from_bytes(key_bytes).unwrap());
+                return Some(verifying_key);
             }
         }
         None
@@ -424,6 +436,21 @@ mod tests {
         // let mut keys = vec![val1.verifying_key().to_bytes(), val2.verifying_key().to_bytes(), val3.verifying_key().to_bytes()];
         // keys.sort();
         // ... then you can calculate exactly who should win block 1, 2, 3, etc.
+    }
+
+    #[test]
+    fn test_validator_selection_skips_invalid_restored_keys() {
+        let mut csprng = OsRng;
+        let valid_validator = SigningKey::random(&mut csprng);
+
+        let mut state = State::new();
+        state.stakes.insert([0u8; PUBLIC_KEY_SIZE], 10);
+        state.stakes.insert(verifying_key_to_bytes(valid_validator.verifying_key()), 20);
+
+        let restored_state = State::from_bytes(&state.to_bytes()).unwrap();
+        let expected_validator = restored_state.get_expected_validator(1).unwrap();
+
+        assert_eq!(expected_validator, valid_validator.verifying_key().clone());
     }
 
     #[test]

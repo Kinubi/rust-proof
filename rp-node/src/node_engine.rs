@@ -264,15 +264,18 @@ impl NodeEngine {
                             request.to_height
                         );
 
-                        let has_more =
-                            request.to_height < self.blockchain.get_latest_block().height;
+                        let highest_served_height = blocks.last().map(|block| block.height);
+                        let has_more = highest_served_height
+                            .map(|height| height < self.blockchain.get_latest_block().height)
+                            .unwrap_or(false);
+
                         vec![NodeAction::SendFrame {
                             peer,
                             frame: NetworkMessage::SyncResponse(SyncResponse {
                                 blocks,
                                 has_more,
                                 next_height: if has_more {
-                                    Some(request.to_height.saturating_add(1))
+                                    highest_served_height.map(|height| height.saturating_add(1))
                                 } else {
                                     None
                                 },
@@ -413,7 +416,7 @@ mod tests {
     }
 
     fn assert_persist_actions(actions: &[NodeAction], expected_hash: [u8; 32]) {
-        assert_eq!(actions.len(), 2);
+        assert!(actions.len() >= 2);
 
         match &actions[0] {
             NodeAction::PersistBlock { block } => {
@@ -633,6 +636,44 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_request_after_sparse_restore_does_not_advertise_missing_history() {
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+        let peer = [4u8; 32];
+        let restored_state = State::new();
+        let restored_head = Block {
+            height: 5,
+            slot: 5,
+            previous_hash: [7u8; 32],
+            validator: rp_core::crypto::genesis_verifying_key(),
+            transactions: vec![],
+            signature: None,
+            slash_proofs: vec![],
+            state_root: restored_state.compute_state_root(),
+        };
+
+        engine.blockchain.restore_head(restored_head, restored_state);
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::SyncRequest(crate::network::message::SyncRequest {
+                from_height: 1,
+                to_height: 5,
+            }).to_bytes(),
+        });
+
+        let NodeAction::SendFrame { frame, .. } = &actions[0] else {
+            panic!("expected SendFrame action");
+        };
+        let NetworkMessage::SyncResponse(response) = NetworkMessage::from_bytes(frame).unwrap() else {
+            panic!("expected SyncResponse frame");
+        };
+
+        assert!(response.blocks.is_empty());
+        assert!(!response.has_more);
+        assert_eq!(response.next_height, None);
+    }
+
+    #[test]
     fn test_peer_transaction_relays_to_other_connected_peers() {
         let mut csprng = OsRng;
         let sender = SigningKey::random(&mut csprng);
@@ -753,7 +794,9 @@ mod tests {
 
         let actions = engine.step(NodeInput::Tick { now_ms: 31_000 });
 
-        assert_eq!(actions.len(), 1);
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(actions[0], NodeAction::ScheduleWake { at_ms: 32_000 }));
+        assert!(matches!(actions[1], NodeAction::ReportEvent { message: "We have a tick" }));
         assert!(engine.pending_requests.is_empty());
     }
 

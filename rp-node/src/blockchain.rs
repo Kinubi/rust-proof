@@ -60,10 +60,28 @@ impl Blockchain {
 
     pub fn restore_head(&mut self, block: Block, state: State) {
         let block_hash = block.hash();
+        self.chain.clear();
         self.chain.insert(block_hash, BlockNode { block, children: vec![] });
         self.head_hash = block_hash;
         self.state = state;
         self.mempool = Mempool::new(10000);
+    }
+
+    pub fn earliest_contiguous_height(&self) -> u64 {
+        let mut current_hash = self.head_hash;
+        let mut earliest_height = self.get_latest_block().height;
+
+        while let Some(node) = self.chain.get(&current_hash) {
+            earliest_height = node.block.height;
+
+            if node.block.height == 0 || !self.chain.contains_key(&node.block.previous_hash) {
+                break;
+            }
+
+            current_hash = node.block.previous_hash;
+        }
+
+        earliest_height
     }
 
     pub fn add_transaction(&mut self, tx: Transaction) -> Result<bool, &'static str> {
@@ -125,6 +143,16 @@ impl Blockchain {
     }
 
     pub fn get_blocks(&self, from_height: u64, to_height: u64) -> Vec<Block> {
+        if from_height > to_height {
+            return Vec::new();
+        }
+
+        let earliest_contiguous_height = self.earliest_contiguous_height();
+        let latest_height = self.get_latest_block().height;
+        if from_height < earliest_contiguous_height || from_height > latest_height {
+            return Vec::new();
+        }
+
         let mut blocks = Vec::new();
         let mut current_hash = self.head_hash;
 
@@ -132,11 +160,14 @@ impl Blockchain {
             if node.block.height >= from_height && node.block.height <= to_height {
                 blocks.push(node.block.clone());
             }
-            if node.block.height == 0 {
+
+            if node.block.height == earliest_contiguous_height || node.block.height == 0 {
                 break;
             }
+
             current_hash = node.block.previous_hash;
         }
+
         blocks.reverse();
         blocks
     }
@@ -307,5 +338,30 @@ mod tests {
         assert!(blockchain.add_block(block_b, &parent_state).is_ok());
         assert_eq!(blockchain.head_hash, block_b_hash);
         assert_eq!(blockchain.get_latest_block().slot, 2);
+    }
+
+    #[test]
+    fn test_sparse_restore_only_serves_contiguous_available_history() {
+        let mut blockchain = Blockchain::new().unwrap();
+        let restored_state = State::new();
+        let restored_head = Block {
+            height: 5,
+            slot: 5,
+            previous_hash: [9u8; 32],
+            validator: genesis_verifying_key(),
+            transactions: vec![],
+            signature: None,
+            slash_proofs: vec![],
+            state_root: restored_state.compute_state_root(),
+        };
+
+        blockchain.restore_head(restored_head.clone(), restored_state);
+
+        assert_eq!(blockchain.earliest_contiguous_height(), 5);
+        assert!(blockchain.get_blocks(1, 5).is_empty());
+
+        let served_blocks = blockchain.get_blocks(5, 5);
+        assert_eq!(served_blocks.len(), 1);
+        assert_eq!(served_blocks[0].hash(), restored_head.hash());
     }
 }

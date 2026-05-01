@@ -1,5 +1,5 @@
 use embassy_time::{ Duration, Instant, Timer };
-use futures::{ SinkExt, StreamExt };
+use futures::{ FutureExt, SinkExt, StreamExt, pin_mut };
 use rp_node::{ contract::{ Clock, Wake, WakeAt }, errors::ContractError };
 
 use crate::runtime::{
@@ -7,7 +7,11 @@ use crate::runtime::{
     manager::{ EventTx, RuntimeEvent, WakeCommand, WakeRx },
 };
 
-const TEST_HEARTBEAT_MS: u64 = 1_000;
+const STARTUP_HEARTBEAT_DELAY_MS: u64 = 1_000;
+
+fn startup_heartbeat_deadline_ms(now_ms: u64) -> u64 {
+    now_ms.saturating_add(STARTUP_HEARTBEAT_DELAY_MS)
+}
 
 pub struct WakeManager {
     wake_at: Option<u64>,
@@ -17,33 +21,53 @@ pub struct WakeManager {
 
 impl WakeManager {
     pub fn new(event_tx: EventTx, wake_rx: WakeRx) -> Self {
-        Self { wake_at: Some(TEST_HEARTBEAT_MS), event_tx, wake_rx }
+        let now_ms = Instant::now().as_millis() as u64;
+        Self {
+            wake_at: Some(startup_heartbeat_deadline_ms(now_ms)),
+            event_tx,
+            wake_rx,
+        }
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
-        let _ = self.wake_task().await?;
-        while let Some(command) = self.wake_rx.next().await {
-            match command {
-                WakeCommand::Schedule { at_ms } => {
-                    self.schedule_wake(WakeAt { deadline_ms: at_ms })?;
-                    self.wake_task().await?;
+        loop {
+            if let Some(wake_at) = self.wake_at {
+                let delay_ms = wake_at.saturating_sub(self.now_ms());
+                let next_command = self.wake_rx.next().fuse();
+                let wake_timer = Timer::after(Duration::from_millis(delay_ms)).fuse();
+                pin_mut!(next_command, wake_timer);
+
+                futures::select_biased! {
+                    command = next_command => {
+                        let Some(command) = command else {
+                            break;
+                        };
+                        self.handle_command(command)?;
+                    }
+                    _ = wake_timer => {
+                        self.wake_at = None;
+                        self.emit_tick().await?;
+                    }
                 }
-                WakeCommand::Cancel => {
-                    self.cancel_wake()?;
-                }
+            } else {
+                let Some(command) = self.wake_rx.next().await else {
+                    break;
+                };
+                self.handle_command(command)?;
             }
         }
+
         Ok(())
     }
 
-    async fn wake_task(&mut self) -> Result<(), RuntimeError> {
-        let Some(wake_at) = self.wake_at.take() else {
-            return Ok(());
-        };
+    fn handle_command(&mut self, command: WakeCommand) -> Result<(), ContractError> {
+        match command {
+            WakeCommand::Schedule { at_ms } => self.schedule_wake(WakeAt { deadline_ms: at_ms }),
+            WakeCommand::Cancel => self.cancel_wake(),
+        }
+    }
 
-        let delay_ms = wake_at.saturating_sub(self.now_ms());
-        Timer::after(Duration::from_millis(delay_ms)).await;
-
+    async fn emit_tick(&mut self) -> Result<(), RuntimeError> {
         if
             let Err(error) = self.event_tx.send(RuntimeEvent::Tick {
                 now_ms: self.now_ms(),
@@ -69,5 +93,28 @@ impl Wake for WakeManager {
 impl Clock for WakeManager {
     fn now_ms(&self) -> u64 {
         Instant::now().as_millis() as u64
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::channel::mpsc;
+
+    #[test]
+    fn startup_heartbeat_deadline_is_relative_to_now() {
+        assert_eq!(startup_heartbeat_deadline_ms(5_000), 6_000);
+    }
+
+    #[test]
+    fn new_initializes_an_absolute_startup_deadline() {
+        let (event_tx, _) = mpsc::channel(1);
+        let (_, wake_rx) = mpsc::channel(1);
+        let before_now = Instant::now().as_millis() as u64;
+
+        let manager = WakeManager::new(event_tx, wake_rx);
+
+        let wake_at = manager.wake_at.expect("startup wake deadline should be set");
+        assert!(wake_at >= before_now.saturating_add(STARTUP_HEARTBEAT_DELAY_MS));
     }
 }
