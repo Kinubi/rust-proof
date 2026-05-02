@@ -1,7 +1,6 @@
-use std::{ collections::VecDeque, io::{ Error, ErrorKind }, sync::Arc };
+use std::{ collections::VecDeque, sync::Arc };
 
 use futures::{
-    AsyncReadExt,
     AsyncWriteExt,
     FutureExt,
     SinkExt,
@@ -14,15 +13,11 @@ use futures::{
 use log::debug;
 use rp_core::traits::{ FromBytes, ToBytes };
 use rp_node::network::message::{ AnnounceResponse, NetworkMessage, SyncResponse };
-use serde::{ Serialize, de::DeserializeOwned };
 
 use crate::{
     identity::manager::IdentityManager,
     network::{
-        codec::{
-            length_prefixed::encode_length_prefixed,
-            postcard_codec::{ PostcardCodec, ValueCodec },
-        },
+        codec::framed::{ read_length_prefixed_frame, read_postcard_frame, write_postcard_frame },
         config::{ MultiaddrLite, NetworkConfig },
         peer_registry::SessionId,
         protocol::{
@@ -720,98 +715,6 @@ fn build_node_hello(
             supports_ping: false,
         },
     }).build()
-}
-
-async fn write_postcard_frame<S, T>(
-    stream: &mut S,
-    value: &T,
-    max_len: u32
-)
-    -> Result<(), RuntimeError>
-    where S: futures::io::AsyncWrite + Unpin, T: Serialize + DeserializeOwned
-{
-    let payload = PostcardCodec::<T>::encode(value)?;
-    let frame = encode_length_prefixed(&payload, max_len)?;
-    stream.write_all(&frame).await.map_err(RuntimeError::NetworkError)?;
-    stream.flush().await.map_err(RuntimeError::NetworkError)
-}
-
-async fn read_postcard_frame<S, T>(stream: &mut S, max_len: u32) -> Result<T, RuntimeError>
-    where S: futures::io::AsyncRead + Unpin, T: Serialize + DeserializeOwned
-{
-    let frame = read_length_prefixed_frame(stream, max_len).await?;
-    let payload = decode_length_prefixed_payload(&frame, max_len)?;
-    PostcardCodec::<T>::decode(payload)
-}
-
-async fn read_length_prefixed_frame<S>(
-    stream: &mut S,
-    max_len: u32
-) -> Result<Vec<u8>, RuntimeError>
-    where S: futures::io::AsyncRead + Unpin
-{
-    let mut prefix = [0u8; 5];
-    let mut prefix_len = 0usize;
-    loop {
-        if prefix_len >= prefix.len() {
-            return Err(
-                RuntimeError::NetworkError(
-                    Error::new(
-                        ErrorKind::InvalidData,
-                        "frame length prefix exceeds u32 varint width"
-                    )
-                )
-            );
-        }
-
-        stream
-            .read_exact(&mut prefix[prefix_len..=prefix_len]).await
-            .map_err(RuntimeError::NetworkError)?;
-        prefix_len += 1;
-
-        if (prefix[prefix_len - 1] & 0x80) == 0 {
-            let payload = decode_length_prefixed_payload_len(&prefix[..prefix_len], max_len)?;
-            let mut frame = Vec::with_capacity(prefix_len + payload);
-            frame.extend_from_slice(&prefix[..prefix_len]);
-            frame.resize(prefix_len + payload, 0);
-            stream.read_exact(&mut frame[prefix_len..]).await.map_err(RuntimeError::NetworkError)?;
-            return Ok(frame);
-        }
-    }
-}
-
-fn decode_length_prefixed_payload<'a>(
-    frame: &'a [u8],
-    max_len: u32
-) -> Result<&'a [u8], RuntimeError> {
-    crate::network::codec::length_prefixed
-        ::decode_length_prefix(frame, max_len)
-        .map(|(_, payload)| payload)
-}
-
-fn decode_length_prefixed_payload_len(prefix: &[u8], max_len: u32) -> Result<usize, RuntimeError> {
-    unsigned_varint::decode
-        ::u32(prefix)
-        .map(|(len, _)| len as usize)
-        .map_err(|error| {
-            RuntimeError::NetworkError(
-                Error::new(ErrorKind::InvalidData, format!("invalid frame length prefix: {error}"))
-            )
-        })
-        .and_then(|len| {
-            if len > (max_len as usize) {
-                Err(
-                    RuntimeError::NetworkError(
-                        Error::new(
-                            ErrorKind::InvalidData,
-                            "frame length exceeds configured maximum"
-                        )
-                    )
-                )
-            } else {
-                Ok(len)
-            }
-        })
 }
 
 fn send_session_event(

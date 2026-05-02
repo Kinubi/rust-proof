@@ -8,7 +8,7 @@ use std::{
 
 use libp2p::{
     core::ConnectedPoint,
-    futures::{ AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, StreamExt },
+    futures::{ AsyncRead, AsyncWrite, StreamExt },
     gossipsub,
     identify,
     identity,
@@ -48,11 +48,14 @@ use rp_node::{
         SyncResponse,
     },
 };
-use serde::{ Deserialize, Serialize, de::DeserializeOwned };
+use serde::{ Deserialize, Serialize };
 
-use crate::runtime::{
-    errors::RuntimeError,
-    manager::{ EventTx, NetworkCommand, NetworkRx, RuntimeEvent },
+use crate::{
+    network::codec::postcard::{ read_postcard_frame, write_postcard_frame },
+    runtime::{
+        errors::RuntimeError,
+        manager::{ EventTx, NetworkCommand, NetworkRx, RuntimeEvent },
+    },
 };
 
 const TAG: &str = "network";
@@ -134,7 +137,7 @@ struct HostNodeIdentity {
 impl HostNodeIdentity {
     fn load_or_create(path: &Path) -> Result<Self, RuntimeError> {
         if path.exists() {
-            let bytes = fs::read(path).map_err(runtime_io_error)?;
+            let bytes = fs::read(path).map_err(RuntimeError::io_other)?;
             let private_key: [u8; 32] = bytes
                 .try_into()
                 .map_err(|_| RuntimeError::config("invalid persisted node identity bytes"))?;
@@ -144,7 +147,7 @@ impl HostNodeIdentity {
 
         let signing_key = SigningKey::random(&mut OsRng);
         let bytes = signing_key.to_bytes();
-        fs::write(path, bytes.as_slice()).map_err(runtime_io_error)?;
+        fs::write(path, bytes.as_slice()).map_err(RuntimeError::io_other)?;
         Ok(Self::from_signing_key(signing_key))
     }
 
@@ -172,7 +175,7 @@ struct HostTransportIdentity {
 impl HostTransportIdentity {
     fn load_or_create(path: &Path) -> Result<(Self, identity::Keypair), RuntimeError> {
         let keypair = if path.exists() {
-            let bytes = fs::read(path).map_err(runtime_io_error)?;
+            let bytes = fs::read(path).map_err(RuntimeError::io_other)?;
             identity::Keypair
                 ::from_protobuf_encoding(&bytes)
                 .map_err(|_| RuntimeError::crypto("invalid persisted transport identity bytes"))?
@@ -181,7 +184,7 @@ impl HostTransportIdentity {
             let encoded = keypair
                 .to_protobuf_encoding()
                 .map_err(|_| RuntimeError::crypto("failed to encode transport identity keypair"))?;
-            fs::write(path, &encoded).map_err(runtime_io_error)?;
+            fs::write(path, &encoded).map_err(RuntimeError::io_other)?;
             keypair
         };
 
@@ -354,7 +357,7 @@ impl NetworkManager {
         config: NetworkConfig
     ) -> Result<Self, RuntimeError> {
         let data_dir = data_dir.as_ref();
-        fs::create_dir_all(data_dir).map_err(runtime_io_error)?;
+        fs::create_dir_all(data_dir).map_err(RuntimeError::io_other)?;
 
         let node_identity = HostNodeIdentity::load_or_create(&data_dir.join(NODE_IDENTITY_FILE))?;
         let (transport_identity, transport_keypair) = HostTransportIdentity::load_or_create(
@@ -362,7 +365,11 @@ impl NetworkManager {
         )?;
         let mut swarm = build_swarm(transport_keypair, &config)?;
         let announce_topic = gossipsub::IdentTopic::new(GOSSIPSUB_ANNOUNCE_TOPIC);
-        swarm.behaviour_mut().gossipsub.subscribe(&announce_topic).map_err(runtime_io_error)?;
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&announce_topic)
+            .map_err(RuntimeError::io_other)?;
 
         Ok(Self {
             config,
@@ -383,7 +390,11 @@ impl NetworkManager {
     }
 
     pub async fn run(&mut self) -> Result<(), RuntimeError> {
-        self.dial_bootstrap_peers();
+        for address in self.config.bootstrap_addrs.clone() {
+            if let Err(error) = self.swarm.dial(address.clone()) {
+                warn!(target: TAG, "failed to dial bootstrap peer {address}: {error}");
+            }
+        }
 
         loop {
             tokio::select! {
@@ -397,14 +408,6 @@ impl NetworkManager {
                 swarm_event = self.swarm.select_next_some() => {
                     self.handle_swarm_event(swarm_event).await?;
                 }
-            }
-        }
-    }
-
-    fn dial_bootstrap_peers(&mut self) {
-        for address in self.config.bootstrap_addrs.clone() {
-            if let Err(error) = self.swarm.dial(address.clone()) {
-                warn!(target: TAG, "failed to dial bootstrap peer {address}: {error}");
             }
         }
     }
@@ -430,7 +433,12 @@ impl NetworkManager {
 
                 let peers = self.peer_by_node.keys().copied().collect::<Vec<_>>();
                 for peer in peers {
-                    if !self.is_host_peer(peer) {
+                    if !self
+                        .peer_by_node
+                        .get(&peer)
+                        .map(|transport_peer| self.host_transport_peers.contains(transport_peer))
+                        .unwrap_or(false)
+                    {
                         self.send_frame(peer, frame.clone())?;
                     }
                 }
@@ -527,7 +535,7 @@ impl NetworkManager {
         self.swarm
             .behaviour_mut()
             .sync.send_response(channel, response)
-            .map_err(|_| runtime_io_error("failed to send sync response"))
+            .map_err(|_| RuntimeError::io_other("failed to send sync response"))
     }
 
     async fn handle_swarm_event(
@@ -546,7 +554,10 @@ impl NetworkManager {
             }
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 debug!(target: TAG, "connection established with {peer_id}");
-                if let Some(address) = remote_address_from_endpoint(&endpoint) {
+                if let Some(address) = match &endpoint {
+                    ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
+                    ConnectedPoint::Listener { send_back_addr, .. } => Some(send_back_addr.clone()),
+                } {
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                 }
                 if
@@ -668,7 +679,7 @@ impl NetworkManager {
                         self.swarm
                             .behaviour_mut()
                             .node_hello.send_response(channel, response)
-                            .map_err(|_| runtime_io_error("failed to send node hello response"))?;
+                            .map_err(|_| RuntimeError::io_other("failed to send node hello response"))?;
                         self.register_verified_peer(peer, verified).await?;
                     }
                     request_response::Message::Response { response, .. } => {
@@ -716,9 +727,7 @@ impl NetworkManager {
                             self.swarm
                                 .behaviour_mut()
                                 .sync.send_response(channel, empty)
-                                .map_err(|_|
-                                    runtime_io_error("failed to send fallback sync response")
-                                )?;
+                                .map_err(|_| RuntimeError::io_other("failed to send fallback sync response"))?;
                             return Ok(());
                         };
 
@@ -788,7 +797,7 @@ impl NetworkManager {
                         self.swarm
                             .behaviour_mut()
                             .announce.send_response(channel, AnnounceResponse { accepted })
-                            .map_err(|_| runtime_io_error("failed to send announce response"))?;
+                            .map_err(|_| RuntimeError::io_other("failed to send announce response"))?;
                     }
                     request_response::Message::Response { response, .. } => {
                         let Some(node_peer) = self.node_by_transport.get(&peer).copied() else {
@@ -903,12 +912,6 @@ impl NetworkManager {
         })
     }
 
-    fn is_host_peer(&self, node_peer: NodePeerId) -> bool {
-        self.peer_by_node
-            .get(&node_peer)
-            .map(|transport_peer| self.host_transport_peers.contains(transport_peer))
-            .unwrap_or(false)
-    }
 }
 
 fn build_swarm(
@@ -918,7 +921,7 @@ fn build_swarm(
     let mut swarm = SwarmBuilder::with_existing_identity(transport_keypair)
         .with_tokio()
         .with_tcp(tcp::Config::default(), noise::Config::new, yamux::Config::default)
-        .map_err(runtime_io_error)?
+        .map_err(RuntimeError::io_other)?
         .with_behaviour(move |local_key| {
             let local_peer_id = local_key.public().to_peer_id();
             let identify_config = identify::Config
@@ -958,13 +961,13 @@ fn build_swarm(
                 ),
             })
         })
-        .map_err(runtime_io_error)?
+        .map_err(RuntimeError::io_other)?
         .with_swarm_config(|cfg| {
             cfg.with_idle_connection_timeout(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS))
         })
         .build();
 
-    swarm.listen_on(config.listen_addr.clone()).map_err(runtime_io_error)?;
+    swarm.listen_on(config.listen_addr.clone()).map_err(RuntimeError::io_other)?;
 
     Ok(swarm)
 }
@@ -1113,126 +1116,6 @@ impl Codec for AnnounceCodec {
         where T: AsyncWrite + Unpin + Send
     {
         write_postcard_frame(io, &response, DEFAULT_MAX_FRAME_LEN).await
-    }
-}
-
-async fn write_postcard_frame<S, T>(stream: &mut S, value: &T, max_len: u32) -> io::Result<()>
-    where S: AsyncWrite + Unpin + Send, T: Serialize + DeserializeOwned
-{
-    let payload = postcard
-        ::to_allocvec(value)
-        .map_err(|_| io::Error::new(ErrorKind::InvalidData, "failed to encode postcard payload"))?;
-    let frame = encode_length_prefixed(&payload, max_len)?;
-    stream.write_all(&frame).await?;
-    stream.close().await
-}
-
-async fn read_postcard_frame<S, T>(stream: &mut S, max_len: u32) -> io::Result<T>
-    where S: AsyncRead + Unpin + Send, T: Serialize + DeserializeOwned
-{
-    let frame = read_length_prefixed_frame(stream, max_len).await?;
-    let (_, payload) = decode_length_prefix(&frame, max_len)?;
-    postcard
-        ::from_bytes(payload)
-        .map_err(|_| io::Error::new(ErrorKind::InvalidData, "failed to decode postcard payload"))
-}
-
-fn encode_length_prefixed(payload: &[u8], max_len: u32) -> io::Result<Vec<u8>> {
-    if payload.len() > (max_len as usize) {
-        return Err(
-            io::Error::new(ErrorKind::InvalidData, "payload exceeds configured frame length limit")
-        );
-    }
-
-    let mut buffer = unsigned_varint::encode::u32_buffer();
-    let prefix = unsigned_varint::encode::u32(payload.len() as u32, &mut buffer);
-    let mut framed = Vec::with_capacity(prefix.len() + payload.len());
-    framed.extend_from_slice(prefix);
-    framed.extend_from_slice(payload);
-    Ok(framed)
-}
-
-fn decode_length_prefix(input: &[u8], max_len: u32) -> io::Result<(usize, &[u8])> {
-    let (payload_len, remaining) = unsigned_varint::decode
-        ::u32(input)
-        .map_err(|error| {
-            io::Error::new(ErrorKind::InvalidData, format!("invalid length prefix: {error}"))
-        })?;
-
-    if payload_len > max_len {
-        return Err(
-            io::Error::new(
-                ErrorKind::InvalidData,
-                "length prefix exceeds configured frame length limit"
-            )
-        );
-    }
-
-    let header_len = input.len() - remaining.len();
-    let total_len = header_len + (payload_len as usize);
-    if input.len() < total_len {
-        return Err(
-            io::Error::new(ErrorKind::UnexpectedEof, "frame body shorter than advertised length")
-        );
-    }
-
-    Ok((header_len, &input[header_len..total_len]))
-}
-
-async fn read_length_prefixed_frame<S>(stream: &mut S, max_len: u32) -> io::Result<Vec<u8>>
-    where S: AsyncRead + Unpin + Send
-{
-    let mut prefix = [0u8; 5];
-    let mut prefix_len = 0usize;
-
-    loop {
-        if prefix_len >= prefix.len() {
-            return Err(
-                io::Error::new(
-                    ErrorKind::InvalidData,
-                    "frame length prefix exceeds u32 varint width"
-                )
-            );
-        }
-
-        stream.read_exact(&mut prefix[prefix_len..=prefix_len]).await?;
-        prefix_len += 1;
-
-        if (prefix[prefix_len - 1] & 0x80) == 0 {
-            let payload_len = decode_length_prefixed_payload_len(&prefix[..prefix_len], max_len)?;
-            let mut frame = Vec::with_capacity(prefix_len + payload_len);
-            frame.extend_from_slice(&prefix[..prefix_len]);
-            frame.resize(prefix_len + payload_len, 0);
-            stream.read_exact(&mut frame[prefix_len..]).await?;
-            return Ok(frame);
-        }
-    }
-}
-
-fn decode_length_prefixed_payload_len(prefix: &[u8], max_len: u32) -> io::Result<usize> {
-    let (payload_len, _) = unsigned_varint::decode
-        ::u32(prefix)
-        .map_err(|error| {
-            io::Error::new(ErrorKind::InvalidData, format!("invalid frame length prefix: {error}"))
-        })?;
-
-    if payload_len > max_len {
-        return Err(
-            io::Error::new(ErrorKind::InvalidData, "frame length exceeds configured maximum")
-        );
-    }
-
-    Ok(payload_len as usize)
-}
-
-fn runtime_io_error(error: impl std::fmt::Display) -> RuntimeError {
-    RuntimeError::NetworkError(io::Error::other(error.to_string()))
-}
-
-fn remote_address_from_endpoint(endpoint: &ConnectedPoint) -> Option<Multiaddr> {
-    match endpoint {
-        ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
-        ConnectedPoint::Listener { send_back_addr, .. } => Some(send_back_addr.clone()),
     }
 }
 

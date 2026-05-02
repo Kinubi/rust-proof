@@ -1036,6 +1036,7 @@ dependencies = [
  "postcard",
  "quick-protobuf",
  "rand 0.10.1",
+ "rp-codec",
  "rp-core",
  "rp-node",
  "serde",
@@ -2376,6 +2377,16 @@ checksum = "f8dd2a808d456c4a54e300a23e9f5a67e122c3024119acbfd73e3bf664491cb2"
 dependencies = [
  "hmac",
  "subtle",
+]
+
+[[package]]
+name = "rp-codec"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "postcard",
+ "serde",
+ "unsigned-varint",
 ]
 
 [[package]]

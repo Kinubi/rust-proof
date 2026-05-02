@@ -2814,6 +2814,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rp-codec"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "postcard",
+ "serde",
+ "unsigned-varint 0.8.0",
+]
+
+[[package]]
 name = "rp-core"
 version = "0.1.0"
 dependencies = [
@@ -2847,6 +2857,7 @@ dependencies = [
  "log",
  "postcard",
  "rand 0.8.6",
+ "rp-codec",
  "rp-core",
  "rp-node",
  "serde",

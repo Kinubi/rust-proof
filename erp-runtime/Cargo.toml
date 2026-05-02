@@ -29,6 +29,7 @@ serde = { version = "1", features = ["derive"] }
 libp2p-identity = { version = "0.2.13", default-features = false, features = ["ecdsa", "ed25519", "peerid", "rand"] }
 rp-core = { path = "../rp-core" }
 rp-node = { path = "../rp-node" }
+rp-codec = { path = "../rp-codec" }
 rand = "0.10.1"
 sha2 = "0.11.0"
 libc = "0.2"

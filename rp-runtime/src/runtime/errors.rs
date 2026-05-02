@@ -1,4 +1,4 @@
-use std::io::Error;
+use std::{fmt::Display, io::Error};
 
 use tokio::sync::mpsc::error;
 use rp_node::errors::{ ContractError, NodeError };
@@ -67,6 +67,10 @@ impl RuntimeError {
             channel: ChannelKind::Wake,
             kind: ChannelErrorKind::WakeCommand,
         }
+    }
+
+    pub fn io_other(error: impl Display) -> Self {
+        Self::NetworkError(Error::other(error.to_string()))
     }
 }
 

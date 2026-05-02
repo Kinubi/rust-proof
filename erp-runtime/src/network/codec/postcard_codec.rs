@@ -16,12 +16,12 @@ where
     T: Serialize + DeserializeOwned,
 {
     fn encode(item: &T) -> Result<Vec<u8>, RuntimeError> {
-        postcard::to_allocvec(item)
+        rp_codec::postcard::encode_postcard(item)
             .map_err(|_| RuntimeError::crypto("failed to serialize postcard payload"))
     }
 
     fn decode(bytes: &[u8]) -> Result<T, RuntimeError> {
-        postcard::from_bytes(bytes)
+        rp_codec::postcard::decode_postcard(bytes)
             .map_err(|_| RuntimeError::crypto("failed to deserialize postcard payload"))
     }
 }

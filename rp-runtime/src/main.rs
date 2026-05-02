@@ -36,7 +36,7 @@ async fn main() {
 
 async fn run() -> Result<(), RuntimeError> {
     let data_dir = runtime_data_dir()?;
-    fs::create_dir_all(&data_dir).map_err(runtime_io_error)?;
+    fs::create_dir_all(&data_dir).map_err(RuntimeError::io_other)?;
 
     let blockchain = Blockchain::new().map_err(RuntimeError::from)?;
     let node_engine = NodeEngine::new(blockchain);
@@ -46,7 +46,7 @@ async fn run() -> Result<(), RuntimeError> {
     let (storage_tx, storage_rx) = mpsc::channel::<StorageCommand>(STORAGE_CHANNEL_CAPACITY);
     let (wake_tx, wake_rx) = mpsc::channel::<WakeCommand>(WAKE_CHANNEL_CAPACITY);
 
-    let storage = SledStorage::new(data_dir.join("sled")).map_err(runtime_io_error)?;
+    let storage = SledStorage::new(data_dir.join("sled")).map_err(RuntimeError::io_other)?;
     let mut node_manager = NodeManager::new(node_engine, event_rx, network_tx, storage_tx, wake_tx);
     let mut network_manager = NetworkManager::new(network_rx, event_tx.clone(), &data_dir)?;
     let mut storage_manager = StorageManager::new(storage, event_tx.clone(), storage_rx);
@@ -119,8 +119,4 @@ fn runtime_data_dir() -> Result<PathBuf, RuntimeError> {
 
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64
-}
-
-fn runtime_io_error(error: impl std::fmt::Display) -> RuntimeError {
-    RuntimeError::NetworkError(std::io::Error::other(error.to_string()))
 }
