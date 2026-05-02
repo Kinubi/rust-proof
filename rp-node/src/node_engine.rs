@@ -400,22 +400,24 @@ impl NodeEngine {
             }
 
             NodeInput::StorageLoaded { block_hash, state_bytes } => {
-                if let Some((parent_peer, parent_height)) = self.pending_blocks
-                    .get(&block_hash)
-                    .and_then(|parked_blocks|
-                        parked_blocks
-                            .first()
-                            .map(|parked_block| {
-                                (parked_block.peer, parked_block.block.height.saturating_sub(1))
-                            })
-                    )
+                if
+                    let Some((parent_peer, parent_height)) = self.pending_blocks
+                        .get(&block_hash)
+                        .and_then(|parked_blocks|
+                            parked_blocks
+                                .first()
+                                .map(|parked_block| {
+                                    (parked_block.peer, parked_block.block.height.saturating_sub(1))
+                                })
+                        )
                 {
                     if let Some(state_bytes) = state_bytes {
                         match State::from_bytes(&state_bytes) {
                             Ok(state) => self.import_parked_blocks(block_hash, &state),
-                            Err(_) => vec![NodeAction::ReportEvent {
-                                message: "invalid snapshot bytes",
-                            }],
+                            Err(_) =>
+                                vec![NodeAction::ReportEvent {
+                                    message: "invalid snapshot bytes",
+                                }],
                         }
                     } else {
                         self.request_parent_block(parent_peer, parent_height)
