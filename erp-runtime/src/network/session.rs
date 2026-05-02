@@ -443,7 +443,9 @@ async fn serve_identify_request<S>(
     loop {
         debug!(target: TAG, "serve_identify_request: waiting for substream");
         let Some(mut substream) = muxer.accept_substream().await? else {
-            return Err(RuntimeError::config("remote closed the connection before requesting identify"));
+            return Err(
+                RuntimeError::config("remote closed the connection before requesting identify")
+            );
         };
         debug!(target: TAG, "serve_identify_request: got substream, starting protocol negotiation");
 
