@@ -495,11 +495,11 @@ impl NetworkManager {
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 debug!(target: TAG, "connection established with {peer_id}");
                 if
-                    let Some(address) = (match &endpoint {
+                    let Some(address) = match &endpoint {
                         ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
                         ConnectedPoint::Listener { send_back_addr, .. } =>
                             Some(send_back_addr.clone()),
-                    })
+                    } 
                 {
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                 }
