@@ -246,6 +246,22 @@ impl NodeHelloVerifier {
     }
 }
 
+fn node_hello_reject_reason(error: &RuntimeError) -> NodeHelloRejectReason {
+    match error {
+        RuntimeError::Config(message) => match *message {
+            "node hello transport peer id does not match authenticated session peer" => {
+                NodeHelloRejectReason::TransportBindingMismatch
+            }
+            "node hello peer id does not match node public key" => {
+                NodeHelloRejectReason::PeerIdMismatch
+            }
+            _ => NodeHelloRejectReason::InvalidSignature,
+        },
+        RuntimeError::Crypto(_) => NodeHelloRejectReason::InvalidSignature,
+        _ => NodeHelloRejectReason::InvalidSignature,
+    }
+}
+
 #[derive(Clone, Default)]
 struct NodeHelloCodec;
 
@@ -560,7 +576,12 @@ impl NetworkManager {
                     self.pending_node_hello.remove(&peer_id) &&
                     !self.node_by_transport.contains_key(&peer_id)
                 {
-                    let hello = self.build_local_node_hello()?;
+                    let Some(hello) = self.build_local_node_hello_or_disconnect(
+                        peer_id,
+                        "failed to build outbound node hello"
+                    ) else {
+                        return Ok(());
+                    };
                     self.swarm.behaviour_mut().node_hello.send_request(&peer_id, hello);
                 }
 
@@ -613,30 +634,86 @@ impl NetworkManager {
             request_response::Event::Message { peer, message, .. } =>
                 match message {
                     request_response::Message::Request { request, channel, .. } => {
-                        let verified = NodeHelloVerifier::verify(&request, &peer.to_bytes())?;
+                        let verified = match NodeHelloVerifier::verify(&request, &peer.to_bytes()) {
+                            Ok(verified) => verified,
+                            Err(error) => {
+                                let reject_reason = node_hello_reject_reason(&error);
+                                warn!(
+                                    target: TAG,
+                                    "rejecting invalid node hello request from {peer}: {:?} ({:?})",
+                                    reject_reason,
+                                    error
+                                );
+
+                                let Some(remote) = self.build_local_node_hello_or_disconnect(
+                                    peer,
+                                    "failed to build node hello rejection"
+                                ) else {
+                                    return Ok(());
+                                };
+
+                                let response = NodeHelloResponse {
+                                    accepted: false,
+                                    remote,
+                                    reject_reason: Some(reject_reason),
+                                };
+
+                                if self
+                                    .swarm
+                                    .behaviour_mut()
+                                    .node_hello
+                                    .send_response(channel, response)
+                                    .is_err()
+                                {
+                                    warn!(target: TAG, "failed to send node hello rejection to {peer}");
+                                }
+
+                                let _ = self.swarm.disconnect_peer_id(peer);
+                                return Ok(());
+                            }
+                        };
+                        let Some(remote) = self.build_local_node_hello_or_disconnect(
+                            peer,
+                            "failed to build node hello response"
+                        ) else {
+                            return Ok(());
+                        };
                         let response = NodeHelloResponse {
                             accepted: true,
-                            remote: self.build_local_node_hello()?,
+                            remote,
                             reject_reason: None,
                         };
-                        self.swarm
+                        if self
+                            .swarm
                             .behaviour_mut()
-                            .node_hello.send_response(channel, response)
-                            .map_err(|_|
-                                RuntimeError::io_other("failed to send node hello response")
-                            )?;
+                            .node_hello
+                            .send_response(channel, response)
+                            .is_err()
+                        {
+                            warn!(target: TAG, "failed to send node hello response to {peer}");
+                            let _ = self.swarm.disconnect_peer_id(peer);
+                            return Ok(());
+                        }
                         self.register_verified_peer(peer, verified).await?;
                     }
                     request_response::Message::Response { response, .. } => {
                         if !response.accepted {
                             warn!(target: TAG, "peer {peer} rejected node hello: {:?}", response.reject_reason);
+                            let _ = self.swarm.disconnect_peer_id(peer);
                             return Ok(());
                         }
 
-                        let verified = NodeHelloVerifier::verify(
+                        let verified = match NodeHelloVerifier::verify(
                             &response.remote,
                             &peer.to_bytes()
-                        )?;
+                        ) {
+                            Ok(verified) => verified,
+                            Err(error) => {
+                                warn!(target: TAG, "disconnecting peer {peer} after invalid node hello response: {:?}", error);
+                                let _ = self.swarm.disconnect_peer_id(peer);
+                                return Ok(());
+                            }
+                        };
                         self.register_verified_peer(peer, verified).await?;
                     }
                 }
@@ -652,6 +729,21 @@ impl NetworkManager {
         }
 
         Ok(())
+    }
+
+    fn build_local_node_hello_or_disconnect(
+        &mut self,
+        peer: PeerId,
+        context: &'static str
+    ) -> Option<NodeHello> {
+        match self.build_local_node_hello() {
+            Ok(hello) => Some(hello),
+            Err(error) => {
+                warn!(target: TAG, "{context} for {peer}: {:?}", error);
+                let _ = self.swarm.disconnect_peer_id(peer);
+                None
+            }
+        }
     }
 
     async fn handle_sync_event(
@@ -1095,6 +1187,12 @@ mod tests {
         AnnounceRequest(AnnounceRequest),
     }
 
+    #[derive(Clone, Copy)]
+    enum MockNodeHelloResponseMode {
+        Valid,
+        InvalidSignature,
+    }
+
     struct MockEmbeddedPeerHandle {
         node_peer_id: NodePeerId,
         listen_addr: Multiaddr,
@@ -1105,6 +1203,7 @@ mod tests {
         swarm: Swarm<MockEmbeddedBehaviour>,
         node_identity: HostNodeIdentity,
         transport_peer_id: Vec<u8>,
+        node_hello_response_mode: MockNodeHelloResponseMode,
         observation_tx: mpsc::Sender<MockPeerObservation>,
         ready_tx: Option<oneshot::Sender<Multiaddr>>,
         connected_runtime_peer: Option<PeerId>,
@@ -1112,6 +1211,12 @@ mod tests {
 
     impl MockEmbeddedPeer {
         async fn spawn() -> MockEmbeddedPeerHandle {
+            Self::spawn_with_node_hello_response_mode(MockNodeHelloResponseMode::Valid).await
+        }
+
+        async fn spawn_with_node_hello_response_mode(
+            node_hello_response_mode: MockNodeHelloResponseMode
+        ) -> MockEmbeddedPeerHandle {
             let node_identity = HostNodeIdentity::from_signing_key(SigningKey::random(&mut OsRng));
             let transport_keypair = identity::Keypair::generate_ed25519();
             let transport_peer_id = transport_keypair.public().to_peer_id().to_bytes();
@@ -1162,6 +1267,7 @@ mod tests {
                 swarm,
                 node_identity,
                 transport_peer_id,
+                node_hello_response_mode,
                 observation_tx,
                 ready_tx: Some(ready_tx),
                 connected_runtime_peer: None,
@@ -1225,11 +1331,7 @@ mod tests {
                                 MockPeerObservation::RuntimeNodeHelloVerified(verified.node_peer_id)
                             ).await
                             .expect("mock observation channel should stay open");
-                        let response = NodeHelloResponse {
-                            accepted: true,
-                            remote: self.build_local_node_hello(),
-                            reject_reason: None,
-                        };
+                        let response = self.build_node_hello_response();
                         self.swarm
                             .behaviour_mut()
                             .node_hello.send_response(channel, response)
@@ -1316,6 +1418,25 @@ mod tests {
                 max_blocks_per_chunk: DEFAULT_MAX_BLOCKS_PER_CHUNK,
                 capabilities,
                 signature: self.node_identity.build_signature(&transcript_bytes),
+            }
+        }
+
+        fn build_node_hello_response(&self) -> NodeHelloResponse {
+            let mut remote = self.build_local_node_hello();
+            if matches!(
+                self.node_hello_response_mode,
+                MockNodeHelloResponseMode::InvalidSignature
+            ) {
+                let signature_byte = remote.signature
+                    .first_mut()
+                    .expect("mock node hello signature should not be empty");
+                *signature_byte ^= 0x01;
+            }
+
+            NodeHelloResponse {
+                accepted: true,
+                remote,
+                reject_reason: None,
             }
         }
     }
@@ -1422,6 +1543,57 @@ mod tests {
             }
         }).await;
         assert!(announce_response.accepted);
+
+        drop(network_tx);
+        timeout(StdDuration::from_secs(5), network_task).await
+            .expect("network task should stop after channel close")
+            .expect("network task should join successfully")
+            .expect("network manager should exit cleanly");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn rp_runtime_invalid_outbound_node_hello_response_is_peer_scoped() {
+        let mock_peer = MockEmbeddedPeer::spawn_with_node_hello_response_mode(
+            MockNodeHelloResponseMode::InvalidSignature
+        ).await;
+        let temp_dir = tempdir().expect("temporary data dir should be created");
+
+        let config = NetworkConfig {
+            listen_addr: "/ip4/127.0.0.1/tcp/0".parse().expect("runtime listen addr should parse"),
+            bootstrap_addrs: vec![mock_peer.listen_addr.clone()],
+            ..NetworkConfig::default()
+        };
+
+        let (event_tx, mut event_rx) = mpsc::channel(32);
+        let (network_tx, network_rx) = mpsc::channel(32);
+
+        let mut network_manager = NetworkManager::new_with_config(
+            network_rx,
+            event_tx,
+            temp_dir.path(),
+            config
+        ).expect("network manager should build for invalid node hello test");
+
+        let network_task = tokio::spawn(async move { network_manager.run().await });
+
+        let mut observation_rx = mock_peer.observation_rx;
+
+        let runtime_node_peer_id = recv_observation(&mut observation_rx, |observation| {
+            match observation {
+                MockPeerObservation::RuntimeNodeHelloVerified(peer) => Some(peer),
+                _ => None,
+            }
+        }).await;
+        assert_ne!(runtime_node_peer_id, mock_peer.node_peer_id);
+
+        assert!(
+            timeout(StdDuration::from_millis(750), event_rx.recv()).await.is_err(),
+            "invalid node hello response should not emit runtime events"
+        );
+        assert!(
+            !network_task.is_finished(),
+            "invalid node hello response should not terminate the network manager"
+        );
 
         drop(network_tx);
         timeout(StdDuration::from_secs(5), network_task).await

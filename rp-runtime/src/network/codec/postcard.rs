@@ -13,5 +13,5 @@ pub async fn write_postcard_frame<S, T>(stream: &mut S, value: &T, max_len: u32)
     let payload = rp_codec::postcard::encode_postcard(value)?;
     let frame = encode_length_prefixed(&payload, max_len)?;
     stream.write_all(&frame).await?;
-    stream.close().await
+    stream.flush().await
 }

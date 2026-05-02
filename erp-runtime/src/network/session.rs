@@ -10,7 +10,7 @@ use futures::{
     pin_mut,
     select,
 };
-use log::debug;
+use log::{ debug, warn };
 use rp_core::traits::{ FromBytes, ToBytes };
 use rp_node::network::message::{ AnnounceResponse, NetworkMessage, SyncResponse };
 
@@ -39,6 +39,7 @@ use crate::{
             node_hello::{
                 NodeHello,
                 NodeHelloBuilder,
+                NodeHelloRejectReason,
                 NodeHelloResponse,
                 NodeHelloVerifier,
                 PeerCapabilities,
@@ -69,6 +70,11 @@ type ActiveSession = yamux::YamuxSession<SessionMuxer>;
 struct EstablishedSession {
     yamux_session: ActiveSession,
     verified_peer: VerifiedPeer,
+}
+
+enum HandshakeOutcome {
+    Established(VerifiedPeer),
+    Rejected,
 }
 
 pub enum SessionCommand {
@@ -134,7 +140,7 @@ impl SessionWorker {
         let mut remote_node_peer_opt = None;
         let result = (async {
             let mut event_tx = event_tx;
-            let EstablishedSession { mut yamux_session, verified_peer } = establish_session(
+            let Some(EstablishedSession { mut yamux_session, verified_peer }) = establish_session(
                 session_id,
                 stream,
                 role,
@@ -142,7 +148,10 @@ impl SessionWorker {
                 transport_identity.as_ref(),
                 &config,
                 expected_transport_peer.as_deref()
-            ).await?;
+            ).await?
+            else {
+                return Ok(());
+            };
 
             debug!(target: TAG, "session {} verified remote node peer {:?}", session_id, verified_peer.node_peer_id);
 
@@ -186,7 +195,7 @@ async fn establish_session(
     transport_identity: &TransportIdentityManager,
     config: &NetworkConfig,
     expected_transport_peer: Option<&[u8]>
-) -> Result<EstablishedSession, RuntimeError> {
+) -> Result<Option<EstablishedSession>, RuntimeError> {
     debug!(target: TAG, "session {} starting", session_id);
     let noise_output = upgrade_noise_transport(session_id, stream, role, transport_identity).await?;
 
@@ -199,7 +208,7 @@ async fn establish_session(
     }
 
     let mut yamux_session = upgrade_yamux_transport(session_id, role, noise_output.stream).await?;
-    let verified_peer = match role {
+    let handshake = match role {
         ConnectionRole::Outbound => {
             debug!(target: TAG, "session {} running outbound identify/node-hello handshake", session_id);
             complete_outbound_handshake(
@@ -222,7 +231,15 @@ async fn establish_session(
         }
     };
 
-    Ok(EstablishedSession { yamux_session, verified_peer })
+    let verified_peer = match handshake {
+        HandshakeOutcome::Established(verified_peer) => verified_peer,
+        HandshakeOutcome::Rejected => {
+            let _ = yamux_session.muxer.close().await;
+            return Ok(None);
+        }
+    };
+
+    Ok(Some(EstablishedSession { yamux_session, verified_peer }))
 }
 
 async fn upgrade_noise_transport(
@@ -333,7 +350,7 @@ async fn complete_outbound_handshake<S>(
     transport_identity: &TransportIdentityManager,
     config: &NetworkConfig,
     authenticated_transport_peer: &[u8]
-) -> Result<VerifiedPeer, RuntimeError>
+) -> Result<HandshakeOutcome, RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     // libp2p identify on /ipfs/id/1.0.0 is request/response: the opener requests identify,
@@ -359,7 +376,7 @@ async fn complete_inbound_handshake<S>(
     transport_identity: &TransportIdentityManager,
     config: &NetworkConfig,
     authenticated_transport_peer: &[u8]
-) -> Result<VerifiedPeer, RuntimeError>
+) -> Result<HandshakeOutcome, RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     let mut identify_served = false;
@@ -381,15 +398,20 @@ async fn complete_inbound_handshake<S>(
                 identify_served = true;
             }
             NODE_HELLO_PROTOCOL => {
-                verified_peer = Some(
-                    answer_node_hello(
-                        &mut io,
-                        node_identity,
-                        transport_identity,
-                        config,
-                        authenticated_transport_peer
-                    ).await?
-                );
+                match answer_node_hello(
+                    &mut io,
+                    node_identity,
+                    transport_identity,
+                    config,
+                    authenticated_transport_peer
+                ).await? {
+                    HandshakeOutcome::Established(peer) => {
+                        verified_peer = Some(peer);
+                    }
+                    HandshakeOutcome::Rejected => {
+                        return Ok(HandshakeOutcome::Rejected);
+                    }
+                }
             }
             _ => {
                 return Err(RuntimeError::config("unexpected session setup protocol"));
@@ -397,7 +419,9 @@ async fn complete_inbound_handshake<S>(
         }
     }
 
-    verified_peer.ok_or_else(|| RuntimeError::config("node hello handshake did not complete"))
+    verified_peer
+        .map(HandshakeOutcome::Established)
+        .ok_or_else(|| RuntimeError::config("node hello handshake did not complete"))
 }
 
 /// Serve an inbound libp2p identify request on /ipfs/id/1.0.0 by sending our identify payload.
@@ -463,7 +487,7 @@ async fn request_node_hello<S>(
     transport_identity: &TransportIdentityManager,
     config: &NetworkConfig,
     authenticated_transport_peer: &[u8]
-) -> Result<VerifiedPeer, RuntimeError>
+) -> Result<HandshakeOutcome, RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     let mut substream = muxer.open_substream().await?;
@@ -474,10 +498,17 @@ async fn request_node_hello<S>(
     write_postcard_frame(&mut io, &local_hello, config.max_frame_len).await?;
     let response: NodeHelloResponse = read_postcard_frame(&mut io, config.max_frame_len).await?;
     if !response.accepted {
-        return Err(RuntimeError::config("remote rejected the node hello handshake"));
+        warn!(target: TAG, "remote rejected the node hello handshake: {:?}", response.reject_reason);
+        return Ok(HandshakeOutcome::Rejected);
     }
 
-    NodeHelloVerifier::verify(&response.remote, authenticated_transport_peer)
+    match NodeHelloVerifier::verify(&response.remote, authenticated_transport_peer) {
+        Ok(verified_peer) => Ok(HandshakeOutcome::Established(verified_peer)),
+        Err(error) => {
+            warn!(target: TAG, "dropping peer after invalid node hello response: {:?}", error);
+            Ok(HandshakeOutcome::Rejected)
+        }
+    }
 }
 
 async fn answer_node_hello<S>(
@@ -486,11 +517,34 @@ async fn answer_node_hello<S>(
     transport_identity: &TransportIdentityManager,
     config: &NetworkConfig,
     authenticated_transport_peer: &[u8]
-) -> Result<VerifiedPeer, RuntimeError>
+) -> Result<HandshakeOutcome, RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     let remote_hello: NodeHello = read_postcard_frame(stream, config.max_frame_len).await?;
-    let verified_peer = NodeHelloVerifier::verify(&remote_hello, authenticated_transport_peer)?;
+    let verified_peer = match NodeHelloVerifier::verify(&remote_hello, authenticated_transport_peer) {
+        Ok(verified_peer) => verified_peer,
+        Err(error) => {
+            let reject_reason = node_hello_reject_reason(&error);
+            warn!(
+                target: TAG,
+                "rejecting invalid node hello request: {:?} ({:?})",
+                reject_reason,
+                error
+            );
+
+            let response = NodeHelloResponse {
+                accepted: false,
+                remote: build_node_hello(node_identity, transport_identity, config)?,
+                reject_reason: Some(reject_reason),
+            };
+
+            if let Err(write_error) = write_postcard_frame(stream, &response, config.max_frame_len).await {
+                warn!(target: TAG, "failed to send node hello rejection: {:?}", write_error);
+            }
+
+            return Ok(HandshakeOutcome::Rejected);
+        }
+    };
     let local_hello = build_node_hello(node_identity, transport_identity, config)?;
     let response = NodeHelloResponse {
         accepted: true,
@@ -498,7 +552,23 @@ async fn answer_node_hello<S>(
         reject_reason: None,
     };
     write_postcard_frame(stream, &response, config.max_frame_len).await?;
-    Ok(verified_peer)
+    Ok(HandshakeOutcome::Established(verified_peer))
+}
+
+fn node_hello_reject_reason(error: &RuntimeError) -> NodeHelloRejectReason {
+    match error {
+        RuntimeError::Config(message) => match *message {
+            "node hello transport peer id does not match authenticated session peer" => {
+                NodeHelloRejectReason::TransportBindingMismatch
+            }
+            "node hello peer id does not match node public key" => {
+                NodeHelloRejectReason::PeerIdMismatch
+            }
+            _ => NodeHelloRejectReason::InvalidSignature,
+        },
+        RuntimeError::Crypto(_) => NodeHelloRejectReason::InvalidSignature,
+        _ => NodeHelloRejectReason::InvalidSignature,
+    }
 }
 
 async fn handle_outbound_frame<S>(
@@ -588,17 +658,23 @@ async fn handle_inbound_substream<S>(
             Ok(())
         }
         NODE_HELLO_PROTOCOL => {
-            let remote = answer_node_hello(
+            match answer_node_hello(
                 &mut io,
                 node_identity,
                 transport_identity,
                 config,
                 verified_peer.transport_peer_id.as_slice()
-            ).await?;
-            if remote.node_peer_id != verified_peer.node_peer_id {
-                return Err(
-                    RuntimeError::config("node hello peer changed during an existing session")
-                );
+            ).await? {
+                HandshakeOutcome::Established(remote) => {
+                    if remote.node_peer_id != verified_peer.node_peer_id {
+                        return Err(
+                            RuntimeError::config("node hello peer changed during an existing session")
+                        );
+                    }
+                }
+                HandshakeOutcome::Rejected => {
+                    warn!(target: TAG, "ignoring invalid node hello during an existing session");
+                }
             }
             Ok(())
         }

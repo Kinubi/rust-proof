@@ -102,24 +102,32 @@ impl NodeEngine {
             .collect()
     }
 
-    fn request_parent_block(&self, parked_blocks: &[ParkedBlock]) -> Vec<NodeAction> {
-        let Some(parked_block) = parked_blocks.first() else {
-            return vec![NodeAction::ReportEvent {
-                message: "no parked blocks for missing parent",
-            }];
-        };
+    fn queue_block_request(
+        &mut self,
+        peer: PeerId,
+        from_height: u64,
+        to_height: u64
+    ) -> NodeAction {
+        self.pending_requests.push(PendingRequest {
+            peer,
+            from_height,
+            to_height,
+            deadline_ms: self.current_time_ms.saturating_add(REQUEST_TIMEOUT_MS),
+        });
 
-        let parent_height = parked_block.block.height.saturating_sub(1);
+        NodeAction::RequestBlocks {
+            peer,
+            from_height,
+            to_height,
+        }
+    }
 
+    fn request_parent_block(&mut self, peer: PeerId, parent_height: u64) -> Vec<NodeAction> {
         vec![
             NodeAction::ReportEvent {
                 message: "parent snapshot missing",
             },
-            NodeAction::RequestBlocks {
-                peer: parked_block.peer,
-                from_height: parent_height,
-                to_height: parent_height,
-            }
+            self.queue_block_request(peer, parent_height, parent_height),
         ]
     }
 
@@ -164,7 +172,7 @@ impl NodeEngine {
         actions
     }
 
-    fn continue_request(request: &PendingRequest, next_height: u64) -> Option<NodeAction> {
+    fn continue_request(&mut self, request: &PendingRequest, next_height: u64) -> Option<NodeAction> {
         if next_height == 0 {
             return None;
         }
@@ -176,11 +184,7 @@ impl NodeEngine {
             next_height.saturating_add(span)
         };
 
-        Some(NodeAction::RequestBlocks {
-            peer: request.peer,
-            from_height: next_height,
-            to_height: next_to_height,
-        })
+        Some(self.queue_block_request(request.peer, next_height, next_to_height))
     }
 
     fn ingest_block(&mut self, peer: PeerId, block: Block) -> Vec<NodeAction> {
@@ -245,15 +249,13 @@ impl NodeEngine {
 
                 // Request blocks from the new peer starting after our current head
                 let local_height = self.blockchain.get_latest_block().height;
+                let from_height = local_height.saturating_add(1);
+                let to_height = local_height.saturating_add(100);
                 vec![
                     NodeAction::ReportEvent {
                         message: "peer connected",
                     },
-                    NodeAction::RequestBlocks {
-                        peer,
-                        from_height: local_height.saturating_add(1),
-                        to_height: local_height.saturating_add(100),
-                    }
+                    self.queue_block_request(peer, from_height, to_height),
                 ]
             }
 
@@ -337,7 +339,7 @@ impl NodeEngine {
 
                         if let Some(next_height) = response.next_height {
                             for request in &completed_requests {
-                                if let Some(action) = Self::continue_request(request, next_height) {
+                                if let Some(action) = self.continue_request(request, next_height) {
                                     actions.push(action);
                                 }
                             }
@@ -370,14 +372,24 @@ impl NodeEngine {
             }
 
             NodeInput::StorageLoaded { block_hash, state_bytes } => {
-                let Some(parked_blocks) = self.pending_blocks.get(&block_hash) else {
+                let Some((parent_peer, parent_height)) = self.pending_blocks
+                    .get(&block_hash)
+                    .and_then(|parked_blocks|
+                        parked_blocks.first().map(|parked_block| {
+                            (
+                                parked_block.peer,
+                                parked_block.block.height.saturating_sub(1),
+                            )
+                        })
+                    )
+                else {
                     return vec![NodeAction::ReportEvent {
                         message: "unexpected snapshot result",
                     }];
                 };
 
                 let Some(state_bytes) = state_bytes else {
-                    return self.request_parent_block(parked_blocks);
+                    return self.request_parent_block(parent_peer, parent_height);
                 };
 
                 let loaded_state = match State::from_bytes(&state_bytes) {
@@ -397,17 +409,7 @@ impl NodeEngine {
             }
 
             NodeInput::ImportRequested { peer, from_height, to_height } => {
-                self.pending_requests.push(PendingRequest {
-                    peer,
-                    from_height,
-                    to_height,
-                    deadline_ms: self.current_time_ms.saturating_add(REQUEST_TIMEOUT_MS),
-                });
-                vec![NodeAction::RequestBlocks {
-                    peer,
-                    from_height,
-                    to_height,
-                }]
+                vec![self.queue_block_request(peer, from_height, to_height)]
             }
         }
     }
@@ -748,7 +750,10 @@ mod tests {
             }).to_bytes(),
         });
 
-        assert_eq!(engine.pending_requests.len(), 0);
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert_eq!(engine.pending_requests[0].peer, peer);
+        assert_eq!(engine.pending_requests[0].from_height, 350);
+        assert_eq!(engine.pending_requests[0].to_height, 449);
         assert_eq!(actions.len(), 1);
         let NodeAction::RequestBlocks {
             peer: action_peer,
@@ -784,7 +789,10 @@ mod tests {
             }).to_bytes(),
         });
 
-        assert_eq!(engine.pending_requests.len(), 0);
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert_eq!(engine.pending_requests[0].peer, peer);
+        assert_eq!(engine.pending_requests[0].from_height, 33);
+        assert_eq!(engine.pending_requests[0].to_height, 100);
         assert_eq!(actions.len(), 1);
         let NodeAction::RequestBlocks {
             peer: action_peer,
@@ -796,6 +804,47 @@ mod tests {
         assert_eq!(action_peer, peer);
         assert_eq!(from_height, 33);
         assert_eq!(to_height, 100);
+    }
+
+    #[test]
+    fn test_peer_connected_initial_sync_records_pending_request_and_paginates() {
+        let peer = [13u8; 32];
+        let mut engine = NodeEngine::new(Blockchain::new().unwrap());
+
+        let actions = engine.step(NodeInput::PeerConnected { peer });
+
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert_eq!(engine.pending_requests[0].peer, peer);
+        assert_eq!(engine.pending_requests[0].from_height, 1);
+        assert_eq!(engine.pending_requests[0].to_height, 100);
+        assert!(matches!(&actions[1], NodeAction::RequestBlocks { .. }));
+
+        let actions = engine.step(NodeInput::FrameReceived {
+            peer,
+            frame: NetworkMessage::SyncResponse(SyncResponse {
+                blocks: vec![],
+                has_more: true,
+                next_height: Some(101),
+            }).to_bytes(),
+        });
+
+        assert_eq!(engine.pending_requests.len(), 1);
+        assert_eq!(engine.pending_requests[0].peer, peer);
+        assert_eq!(engine.pending_requests[0].from_height, 101);
+        assert_eq!(engine.pending_requests[0].to_height, 200);
+        assert_eq!(actions.len(), 1);
+
+        let NodeAction::RequestBlocks {
+            peer: action_peer,
+            from_height,
+            to_height,
+        } = actions[0] else {
+            panic!("expected paginated RequestBlocks action");
+        };
+
+        assert_eq!(action_peer, peer);
+        assert_eq!(from_height, 101);
+        assert_eq!(to_height, 200);
     }
 
     #[test]

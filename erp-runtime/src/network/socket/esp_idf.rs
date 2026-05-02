@@ -63,9 +63,9 @@ impl EspTcpStream {
     }
 }
 
-/// Check if error means "try again later" - handles both WouldBlock and lwIP's EINPROGRESS
+/// Check if error means "try again later" on a non-blocking socket.
 fn is_would_block(e: &std::io::Error) -> bool {
-    e.kind() == ErrorKind::WouldBlock || e.raw_os_error() == Some(119)
+    e.kind() == ErrorKind::WouldBlock || e.raw_os_error() == Some(libc::EINPROGRESS)
 }
 
 impl AsyncRead for EspTcpStream {
@@ -253,12 +253,7 @@ impl SocketFactory for EspSocketFactory {
                 Ok(()) => {
                     debug!(target: TAG, "connected to {:?} (immediate)", addr);
                 }
-                Err(e) if
-                    e.kind() == ErrorKind::WouldBlock ||
-                    e.raw_os_error() == Some(115) || // Linux EINPROGRESS
-                    e.raw_os_error() == Some(119)
-                => {
-                    // lwIP EINPROGRESS
+                Err(e) if is_would_block(&e) => {
                     // Non-blocking connect in progress
                     let deadline =
                         std::time::Instant::now() +
