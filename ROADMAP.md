@@ -249,6 +249,8 @@ Detailed execution plan: `PHASE_3_BUILD_PLAN.md`.
 
 Turn the current desktop client scaffold into the wallet and operator application.
 
+Detailed execution plan: `PHASE_4_BUILD_PLAN.md`.
+
 ### Tasks
 
 - evolve `rp-client/` into the full wallet and operator application
