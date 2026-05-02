@@ -643,6 +643,8 @@ async fn wait_for_sync_response(
     command_rx: &mut SessionCommandRx,
     deferred_commands: &mut VecDeque<SessionCommand>
 ) -> Result<SyncResponse, RuntimeError> {
+    let mut retained_commands = VecDeque::new();
+
     loop {
         let command = if let Some(command) = deferred_commands.pop_front() {
             Some(command)
@@ -658,10 +660,11 @@ async fn wait_for_sync_response(
 
                 match message {
                     NetworkMessage::SyncResponse(response) => {
+                        restore_deferred_commands(deferred_commands, &mut retained_commands);
                         return Ok(response);
                     }
                     other => {
-                        deferred_commands.push_back(SessionCommand::SendFrame(other.to_bytes()));
+                        retained_commands.push_back(SessionCommand::SendFrame(other.to_bytes()));
                     }
                 }
             }
@@ -678,6 +681,15 @@ async fn wait_for_sync_response(
                 );
             }
         }
+    }
+}
+
+fn restore_deferred_commands(
+    deferred_commands: &mut VecDeque<SessionCommand>,
+    retained_commands: &mut VecDeque<SessionCommand>
+) {
+    while let Some(command) = retained_commands.pop_back() {
+        deferred_commands.push_front(command);
     }
 }
 
