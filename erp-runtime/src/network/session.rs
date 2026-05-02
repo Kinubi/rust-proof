@@ -148,8 +148,7 @@ impl SessionWorker {
                 transport_identity.as_ref(),
                 &config,
                 expected_transport_peer.as_deref()
-            ).await?
-            else {
+            ).await? else {
                 return Ok(());
             };
 
@@ -398,13 +397,15 @@ async fn complete_inbound_handshake<S>(
                 identify_served = true;
             }
             NODE_HELLO_PROTOCOL => {
-                match answer_node_hello(
-                    &mut io,
-                    node_identity,
-                    transport_identity,
-                    config,
-                    authenticated_transport_peer
-                ).await? {
+                match
+                    answer_node_hello(
+                        &mut io,
+                        node_identity,
+                        transport_identity,
+                        config,
+                        authenticated_transport_peer
+                    ).await?
+                {
                     HandshakeOutcome::Established(peer) => {
                         verified_peer = Some(peer);
                     }
@@ -521,7 +522,9 @@ async fn answer_node_hello<S>(
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
     let remote_hello: NodeHello = read_postcard_frame(stream, config.max_frame_len).await?;
-    let verified_peer = match NodeHelloVerifier::verify(&remote_hello, authenticated_transport_peer) {
+    let verified_peer = match
+        NodeHelloVerifier::verify(&remote_hello, authenticated_transport_peer)
+    {
         Ok(verified_peer) => verified_peer,
         Err(error) => {
             let reject_reason = node_hello_reject_reason(&error);
@@ -538,7 +541,13 @@ async fn answer_node_hello<S>(
                 reject_reason: Some(reject_reason),
             };
 
-            if let Err(write_error) = write_postcard_frame(stream, &response, config.max_frame_len).await {
+            if
+                let Err(write_error) = write_postcard_frame(
+                    stream,
+                    &response,
+                    config.max_frame_len
+                ).await
+            {
                 warn!(target: TAG, "failed to send node hello rejection: {:?}", write_error);
             }
 
@@ -557,15 +566,16 @@ async fn answer_node_hello<S>(
 
 fn node_hello_reject_reason(error: &RuntimeError) -> NodeHelloRejectReason {
     match error {
-        RuntimeError::Config(message) => match *message {
-            "node hello transport peer id does not match authenticated session peer" => {
-                NodeHelloRejectReason::TransportBindingMismatch
+        RuntimeError::Config(message) =>
+            match *message {
+                "node hello transport peer id does not match authenticated session peer" => {
+                    NodeHelloRejectReason::TransportBindingMismatch
+                }
+                "node hello peer id does not match node public key" => {
+                    NodeHelloRejectReason::PeerIdMismatch
+                }
+                _ => NodeHelloRejectReason::InvalidSignature,
             }
-            "node hello peer id does not match node public key" => {
-                NodeHelloRejectReason::PeerIdMismatch
-            }
-            _ => NodeHelloRejectReason::InvalidSignature,
-        },
         RuntimeError::Crypto(_) => NodeHelloRejectReason::InvalidSignature,
         _ => NodeHelloRejectReason::InvalidSignature,
     }
@@ -658,17 +668,21 @@ async fn handle_inbound_substream<S>(
             Ok(())
         }
         NODE_HELLO_PROTOCOL => {
-            match answer_node_hello(
-                &mut io,
-                node_identity,
-                transport_identity,
-                config,
-                verified_peer.transport_peer_id.as_slice()
-            ).await? {
+            match
+                answer_node_hello(
+                    &mut io,
+                    node_identity,
+                    transport_identity,
+                    config,
+                    verified_peer.transport_peer_id.as_slice()
+                ).await?
+            {
                 HandshakeOutcome::Established(remote) => {
                     if remote.node_peer_id != verified_peer.node_peer_id {
                         return Err(
-                            RuntimeError::config("node hello peer changed during an existing session")
+                            RuntimeError::config(
+                                "node hello peer changed during an existing session"
+                            )
                         );
                     }
                 }

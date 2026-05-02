@@ -127,7 +127,7 @@ impl NodeEngine {
             NodeAction::ReportEvent {
                 message: "parent snapshot missing",
             },
-            self.queue_block_request(peer, parent_height, parent_height),
+            self.queue_block_request(peer, parent_height, parent_height)
         ]
     }
 
@@ -172,7 +172,11 @@ impl NodeEngine {
         actions
     }
 
-    fn continue_request(&mut self, request: &PendingRequest, next_height: u64) -> Option<NodeAction> {
+    fn continue_request(
+        &mut self,
+        request: &PendingRequest,
+        next_height: u64
+    ) -> Option<NodeAction> {
         if next_height == 0 {
             return None;
         }
@@ -255,7 +259,7 @@ impl NodeEngine {
                     NodeAction::ReportEvent {
                         message: "peer connected",
                     },
-                    self.queue_block_request(peer, from_height, to_height),
+                    self.queue_block_request(peer, from_height, to_height)
                 ]
             }
 
@@ -375,14 +379,12 @@ impl NodeEngine {
                 let Some((parent_peer, parent_height)) = self.pending_blocks
                     .get(&block_hash)
                     .and_then(|parked_blocks|
-                        parked_blocks.first().map(|parked_block| {
-                            (
-                                parked_block.peer,
-                                parked_block.block.height.saturating_sub(1),
-                            )
-                        })
-                    )
-                else {
+                        parked_blocks
+                            .first()
+                            .map(|parked_block| {
+                                (parked_block.peer, parked_block.block.height.saturating_sub(1))
+                            })
+                    ) else {
                     return vec![NodeAction::ReportEvent {
                         message: "unexpected snapshot result",
                     }];

@@ -248,15 +248,16 @@ impl NodeHelloVerifier {
 
 fn node_hello_reject_reason(error: &RuntimeError) -> NodeHelloRejectReason {
     match error {
-        RuntimeError::Config(message) => match *message {
-            "node hello transport peer id does not match authenticated session peer" => {
-                NodeHelloRejectReason::TransportBindingMismatch
+        RuntimeError::Config(message) =>
+            match *message {
+                "node hello transport peer id does not match authenticated session peer" => {
+                    NodeHelloRejectReason::TransportBindingMismatch
+                }
+                "node hello peer id does not match node public key" => {
+                    NodeHelloRejectReason::PeerIdMismatch
+                }
+                _ => NodeHelloRejectReason::InvalidSignature,
             }
-            "node hello peer id does not match node public key" => {
-                NodeHelloRejectReason::PeerIdMismatch
-            }
-            _ => NodeHelloRejectReason::InvalidSignature,
-        },
         RuntimeError::Crypto(_) => NodeHelloRejectReason::InvalidSignature,
         _ => NodeHelloRejectReason::InvalidSignature,
     }
@@ -511,11 +512,11 @@ impl NetworkManager {
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 debug!(target: TAG, "connection established with {peer_id}");
                 if
-                    let Some(address) = match &endpoint {
+                    let Some(address) = (match &endpoint {
                         ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
                         ConnectedPoint::Listener { send_back_addr, .. } =>
                             Some(send_back_addr.clone()),
-                    } 
+                    })
                 {
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                 }
@@ -658,12 +659,11 @@ impl NetworkManager {
                                     reject_reason: Some(reject_reason),
                                 };
 
-                                if self
-                                    .swarm
-                                    .behaviour_mut()
-                                    .node_hello
-                                    .send_response(channel, response)
-                                    .is_err()
+                                if
+                                    self.swarm
+                                        .behaviour_mut()
+                                        .node_hello.send_response(channel, response)
+                                        .is_err()
                                 {
                                     warn!(target: TAG, "failed to send node hello rejection to {peer}");
                                 }
@@ -683,12 +683,11 @@ impl NetworkManager {
                             remote,
                             reject_reason: None,
                         };
-                        if self
-                            .swarm
-                            .behaviour_mut()
-                            .node_hello
-                            .send_response(channel, response)
-                            .is_err()
+                        if
+                            self.swarm
+                                .behaviour_mut()
+                                .node_hello.send_response(channel, response)
+                                .is_err()
                         {
                             warn!(target: TAG, "failed to send node hello response to {peer}");
                             let _ = self.swarm.disconnect_peer_id(peer);
@@ -703,10 +702,9 @@ impl NetworkManager {
                             return Ok(());
                         }
 
-                        let verified = match NodeHelloVerifier::verify(
-                            &response.remote,
-                            &peer.to_bytes()
-                        ) {
+                        let verified = match
+                            NodeHelloVerifier::verify(&response.remote, &peer.to_bytes())
+                        {
                             Ok(verified) => verified,
                             Err(error) => {
                                 warn!(target: TAG, "disconnecting peer {peer} after invalid node hello response: {:?}", error);
@@ -1423,10 +1421,7 @@ mod tests {
 
         fn build_node_hello_response(&self) -> NodeHelloResponse {
             let mut remote = self.build_local_node_hello();
-            if matches!(
-                self.node_hello_response_mode,
-                MockNodeHelloResponseMode::InvalidSignature
-            ) {
+            if matches!(self.node_hello_response_mode, MockNodeHelloResponseMode::InvalidSignature) {
                 let signature_byte = remote.signature
                     .first_mut()
                     .expect("mock node hello signature should not be empty");
