@@ -2864,7 +2864,6 @@ dependencies = [
  "sled",
  "tempfile",
  "tokio",
- "unsigned-varint 0.8.0",
 ]
 
 [[package]]

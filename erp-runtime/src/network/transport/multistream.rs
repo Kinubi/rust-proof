@@ -1,8 +1,8 @@
 use std::io::{ Error, ErrorKind };
 
-use futures::io::{ AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt };
+use futures::io::{ AsyncRead, AsyncWrite, AsyncWriteExt };
 use log::debug;
-use unsigned_varint::{ decode, encode };
+use rp_codec::length_prefixed::{ decode_length_prefix, encode_length_prefixed, read_length_prefixed_frame };
 
 use crate::runtime::errors::RuntimeError;
 
@@ -29,30 +29,22 @@ pub async fn write_protocol<S>(stream: &mut S, protocol: &str) -> Result<(), Run
         );
     }
 
-    let mut prefix_buffer = encode::u32_buffer();
-    let prefix = encode::u32(line.len() as u32, &mut prefix_buffer);
-    stream.write_all(prefix).await.map_err(RuntimeError::NetworkError)?;
-    stream.write_all(&line).await.map_err(RuntimeError::NetworkError)?;
+    let frame = encode_length_prefixed(&line, MAX_PROTOCOL_FRAME_LEN as u32).map_err(
+        RuntimeError::NetworkError
+    )?;
+    stream.write_all(&frame).await.map_err(RuntimeError::NetworkError)?;
     stream.flush().await.map_err(RuntimeError::NetworkError)
 }
 
 pub async fn read_protocol<S>(stream: &mut S, max_len: usize) -> Result<String, RuntimeError>
     where S: AsyncRead + Unpin
 {
-    let frame_len = read_length(stream).await?;
-    if frame_len > max_len || frame_len > MAX_PROTOCOL_FRAME_LEN {
-        return Err(
-            RuntimeError::NetworkError(
-                Error::new(
-                    ErrorKind::InvalidData,
-                    "multistream protocol line exceeds configured maximum length"
-                )
-            )
-        );
-    }
-
-    let mut line = vec![0u8; frame_len];
-    stream.read_exact(&mut line).await.map_err(RuntimeError::NetworkError)?;
+    let frame_limit = max_len.min(MAX_PROTOCOL_FRAME_LEN) as u32;
+    let frame = read_length_prefixed_frame(stream, frame_limit).await.map_err(
+        RuntimeError::NetworkError
+    )?;
+    let (_, payload) = decode_length_prefix(&frame, frame_limit).map_err(RuntimeError::NetworkError)?;
+    let mut line = payload.to_vec();
 
     if !line.ends_with(b"\n") {
         return Err(
@@ -138,31 +130,4 @@ pub async fn listener_select_optional<S>(
     debug!(target: TAG, "listener_select: rejecting protocol {:?}", requested);
     write_protocol(stream, MULTISTREAM_NOT_AVAILABLE).await?;
     Ok(None)
-}
-
-async fn read_length<S>(stream: &mut S) -> Result<usize, RuntimeError> where S: AsyncRead + Unpin {
-    let mut prefix = [0u8; 5];
-    for index in 0..prefix.len() {
-        stream.read_exact(&mut prefix[index..=index]).await.map_err(RuntimeError::NetworkError)?;
-
-        if (prefix[index] & 0x80) == 0 {
-            return decode
-                ::u32(&prefix[..=index])
-                .map(|(value, _)| value as usize)
-                .map_err(|error| {
-                    RuntimeError::NetworkError(
-                        Error::new(
-                            ErrorKind::InvalidData,
-                            format!("invalid multistream varint prefix: {error}")
-                        )
-                    )
-                });
-        }
-    }
-
-    Err(
-        RuntimeError::NetworkError(
-            Error::new(ErrorKind::InvalidData, "multistream varint prefix exceeds u32 length")
-        )
-    )
 }
