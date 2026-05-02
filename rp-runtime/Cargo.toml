@@ -21,6 +21,7 @@ libp2p = { version = "0.56.0", features = [
 	"kad",
 	"tcp",
 	"noise",
+	"ping",
 	"yamux",
 	"macros",
 	"request-response",

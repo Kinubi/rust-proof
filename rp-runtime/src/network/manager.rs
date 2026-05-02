@@ -14,6 +14,7 @@ use libp2p::{
     identity,
     kad,
     noise,
+    ping,
     request_response::{ self, Codec, OutboundRequestId, ProtocolSupport, ResponseChannel },
     swarm::{ NetworkBehaviour, SwarmEvent },
     tcp,
@@ -277,6 +278,7 @@ struct RuntimeBehaviour {
     gossipsub: gossipsub::Behaviour,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
     identify: identify::Behaviour,
+    ping: ping::Behaviour,
     node_hello: request_response::Behaviour<NodeHelloCodec>,
     sync: request_response::Behaviour<SyncCodec>,
     announce: request_response::Behaviour<AnnounceCodec>,
@@ -512,11 +514,11 @@ impl NetworkManager {
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 debug!(target: TAG, "connection established with {peer_id}");
                 if
-                    let Some(address) = (match &endpoint {
+                    let Some(address) = match &endpoint {
                         ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
                         ConnectedPoint::Listener { send_back_addr, .. } =>
                             Some(send_back_addr.clone()),
-                    })
+                    }
                 {
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                 }
@@ -536,6 +538,9 @@ impl NetworkManager {
             }
             SwarmEvent::Behaviour(RuntimeBehaviourEvent::Identify(event)) => {
                 self.handle_identify_event(event)?;
+            }
+            SwarmEvent::Behaviour(RuntimeBehaviourEvent::Ping(event)) => {
+                self.handle_ping_event(event);
             }
             SwarmEvent::Behaviour(RuntimeBehaviourEvent::Gossipsub(event)) => {
                 self.handle_gossipsub_event(event).await?;
@@ -558,6 +563,30 @@ impl NetworkManager {
         }
 
         Ok(())
+    }
+
+    fn handle_ping_event(&mut self, event: ping::Event) {
+        match event.result {
+            Ok(rtt) => {
+                debug!(
+                    target: TAG,
+                    "ping with {} on connection {} succeeded in {:?}",
+                    event.peer,
+                    event.connection,
+                    rtt
+                );
+            }
+            Err(error) => {
+                warn!(
+                    target: TAG,
+                    "ping with {} on connection {} failed: {}",
+                    event.peer,
+                    event.connection,
+                    error
+                );
+                let _ = self.swarm.disconnect_peer_id(event.peer);
+            }
+        }
     }
 
     fn handle_identify_event(&mut self, event: identify::Event) -> Result<(), RuntimeError> {
@@ -925,7 +954,7 @@ impl NetworkManager {
         let capabilities = PeerCapabilities {
             supports_sync_v1: true,
             supports_announce_v1: true,
-            supports_ping: false,
+            supports_ping: true,
         };
         let transcript = NodeHelloTranscript {
             version: 1,
@@ -985,6 +1014,9 @@ fn build_swarm(
                     kad::store::MemoryStore::new(local_peer_id)
                 ),
                 identify: identify::Behaviour::new(identify_config),
+                ping: ping::Behaviour::new(
+                    ping::Config::new().with_timeout(config.request_timeout)
+                ),
                 node_hello: request_response::Behaviour::new(
                     [(StreamProtocol::new(NODE_HELLO_PROTOCOL), ProtocolSupport::Full)],
                     request_response::Config::default().with_request_timeout(config.request_timeout)
@@ -1174,6 +1206,7 @@ mod tests {
     #[derive(NetworkBehaviour)]
     struct MockEmbeddedBehaviour {
         identify: identify::Behaviour,
+        ping: ping::Behaviour,
         node_hello: request_response::Behaviour<NodeHelloCodec>,
         sync: request_response::Behaviour<SyncCodec>,
         announce: request_response::Behaviour<AnnounceCodec>,
@@ -1233,6 +1266,9 @@ mod tests {
                             identify::Config
                                 ::new(IDENTIFY_PROTOCOL_VERSION.to_string(), local_key.public())
                                 .with_agent_version("erp-runtime-test/0.1.0".to_string())
+                        ),
+                        ping: ping::Behaviour::new(
+                            ping::Config::new().with_timeout(Duration::from_secs(10))
                         ),
                         node_hello: request_response::Behaviour::new(
                             [(StreamProtocol::new(NODE_HELLO_PROTOCOL), ProtocolSupport::Full)],
@@ -1304,6 +1340,7 @@ mod tests {
                 SwarmEvent::Behaviour(MockEmbeddedBehaviourEvent::NodeHello(event)) => {
                     self.handle_node_hello_event(event).await;
                 }
+                SwarmEvent::Behaviour(MockEmbeddedBehaviourEvent::Ping(_)) => {}
                 SwarmEvent::Behaviour(MockEmbeddedBehaviourEvent::Sync(event)) => {
                     self.handle_sync_event(event).await;
                 }
@@ -1393,7 +1430,7 @@ mod tests {
             let capabilities = PeerCapabilities {
                 supports_sync_v1: true,
                 supports_announce_v1: true,
-                supports_ping: false,
+                supports_ping: true,
             };
             let transcript = NodeHelloTranscript {
                 version: 1,

@@ -1,6 +1,7 @@
 use std::{ collections::VecDeque, sync::Arc };
 
 use futures::{
+    AsyncReadExt,
     AsyncWriteExt,
     FutureExt,
     SinkExt,
@@ -27,7 +28,7 @@ use crate::{
             IDENTIFY_PUSH_PROTOCOL,
             INBOUND_SESSION_PROTOCOLS,
             NODE_HELLO_PROTOCOL,
-            SESSION_SETUP_PROTOCOLS,
+            PING_PROTOCOL,
             SYNC_PROTOCOL,
             announce::{
                 decode_announce_request,
@@ -389,12 +390,18 @@ async fn complete_inbound_handshake<S>(
         };
 
         let mut io = muxer.io(&mut substream);
-        let protocol = listener_select(&mut io, SESSION_SETUP_PROTOCOLS).await?;
+        let protocol = listener_select(
+            &mut io,
+            &[IDENTIFY_PROTOCOL, NODE_HELLO_PROTOCOL, PING_PROTOCOL]
+        ).await?;
 
         match protocol.as_str() {
             IDENTIFY_PROTOCOL => {
                 send_identify(&mut io, config, transport_identity).await?;
                 identify_served = true;
+            }
+            PING_PROTOCOL => {
+                answer_ping(&mut io).await?;
             }
             NODE_HELLO_PROTOCOL => {
                 match
@@ -433,18 +440,28 @@ async fn serve_identify_request<S>(
 ) -> Result<(), RuntimeError>
     where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
 {
-    debug!(target: TAG, "serve_identify_request: waiting for substream");
-    let Some(mut substream) = muxer.accept_substream().await? else {
-        return Err(RuntimeError::config("remote closed the connection before requesting identify"));
-    };
-    debug!(target: TAG, "serve_identify_request: got substream, starting protocol negotiation");
+    loop {
+        debug!(target: TAG, "serve_identify_request: waiting for substream");
+        let Some(mut substream) = muxer.accept_substream().await? else {
+            return Err(RuntimeError::config("remote closed the connection before requesting identify"));
+        };
+        debug!(target: TAG, "serve_identify_request: got substream, starting protocol negotiation");
 
-    let mut io = muxer.io(&mut substream);
-    listener_select(&mut io, &[IDENTIFY_PROTOCOL]).await?;
-    debug!(target: TAG, "serve_identify_request: protocol negotiated, sending identify frame");
-    send_identify(&mut io, config, transport_identity).await?;
-    debug!(target: TAG, "serve_identify_request: identify sent");
-    Ok(())
+        let mut io = muxer.io(&mut substream);
+        let protocol = listener_select(&mut io, &[IDENTIFY_PROTOCOL, PING_PROTOCOL]).await?;
+        match protocol.as_str() {
+            IDENTIFY_PROTOCOL => {
+                debug!(target: TAG, "serve_identify_request: protocol negotiated, sending identify frame");
+                send_identify(&mut io, config, transport_identity).await?;
+                debug!(target: TAG, "serve_identify_request: identify sent");
+                return Ok(());
+            }
+            PING_PROTOCOL => {
+                answer_ping(&mut io).await?;
+            }
+            _ => unreachable!("listener_select accepted an unexpected session-setup protocol"),
+        }
+    }
 }
 
 async fn request_identify<S>(
@@ -692,6 +709,7 @@ async fn handle_inbound_substream<S>(
             }
             Ok(())
         }
+        PING_PROTOCOL => answer_ping(&mut io).await,
         ANNOUNCE_PROTOCOL => {
             let frame = read_length_prefixed_frame(&mut io, config.max_frame_len).await?;
             let request = decode_announce_request(&frame, config.max_frame_len)?;
@@ -814,9 +832,20 @@ fn build_node_hello(
         capabilities: PeerCapabilities {
             supports_sync_v1: true,
             supports_announce_v1: true,
-            supports_ping: false,
+            supports_ping: true,
         },
     }).build()
+}
+
+async fn answer_ping<S>(stream: &mut S) -> Result<(), RuntimeError>
+    where S: futures::io::AsyncRead + futures::io::AsyncWrite + Unpin
+{
+    const PING_SIZE: usize = 32;
+
+    let mut payload = [0u8; PING_SIZE];
+    stream.read_exact(&mut payload).await.map_err(RuntimeError::NetworkError)?;
+    stream.write_all(&payload).await.map_err(RuntimeError::NetworkError)?;
+    stream.flush().await.map_err(RuntimeError::NetworkError)
 }
 
 fn send_session_event(
