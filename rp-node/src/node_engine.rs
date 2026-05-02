@@ -23,6 +23,7 @@ pub struct NodeEngine {
     pub pending_requests: Vec<PendingRequest>,
     pub pending_blocks: BTreeMap<BlockHash, Vec<ParkedBlock>>,
     current_time_ms: u64,
+    scheduled_wake_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +48,7 @@ impl NodeEngine {
             pending_requests: Vec::new(),
             pending_blocks: BTreeMap::new(),
             current_time_ms: 0,
+            scheduled_wake_at_ms: None,
         }
     }
 
@@ -85,6 +87,24 @@ impl NodeEngine {
 
     fn prune_expired_requests(&mut self, now_ms: u64) {
         self.pending_requests.retain(|request| request.deadline_ms > now_ms);
+    }
+
+    fn sync_wake_action(&mut self) -> Option<NodeAction> {
+        let next_wake_at_ms = self.pending_requests
+            .iter()
+            .map(|request| request.deadline_ms)
+            .min();
+
+        if next_wake_at_ms == self.scheduled_wake_at_ms {
+            return None;
+        }
+
+        self.scheduled_wake_at_ms = next_wake_at_ms;
+
+        match next_wake_at_ms {
+            Some(at_ms) => Some(NodeAction::ScheduleWake { at_ms }),
+            None => Some(NodeAction::CancelWake),
+        }
     }
 
     fn relay_transaction(&self, source_peer: PeerId, transaction: &Transaction) -> Vec<NodeAction> {
@@ -234,15 +254,12 @@ impl NodeEngine {
     }
 
     pub fn step(&mut self, input: NodeInput) -> Vec<NodeAction> {
-        match input {
+        let mut actions = match input {
             NodeInput::Tick { now_ms } => {
                 self.current_time_ms = now_ms;
                 self.prune_expired_requests(now_ms);
 
-                let mut actions = Vec::new();
-                actions.push(NodeAction::ScheduleWake { at_ms: now_ms + 1_000 });
-                actions.push(NodeAction::ReportEvent { message: "We have a tick" });
-                actions
+                Vec::new()
             }
 
             NodeInput::PeerConnected { peer } => {
@@ -272,90 +289,97 @@ impl NodeEngine {
             }
 
             NodeInput::FrameReceived { peer, frame } => {
-                let message = match NetworkMessage::from_bytes(&frame) {
-                    Ok(message) => message,
-                    Err(_) => {
-                        return vec![NodeAction::ReportEvent {
+                match NetworkMessage::from_bytes(&frame) {
+                    Ok(message) =>
+                        match message {
+                            NetworkMessage::AnnounceRequest(request) =>
+                                match request.kind {
+                                    AnnounceKind::NewBlock(block) => self.ingest_block(peer, block),
+                                    AnnounceKind::NewTransaction(tx) => {
+                                        match self.blockchain.add_transaction(tx.clone()) {
+                                            Ok(true) => self.relay_transaction(peer, &tx),
+                                            Ok(false) => Vec::new(),
+                                            Err(error) =>
+                                                vec![NodeAction::ReportEvent { message: error }],
+                                        }
+                                    }
+                                }
+                            NetworkMessage::SyncRequest(request) => {
+                                let blocks = self.blockchain.get_blocks(
+                                    request.from_height,
+                                    request.to_height
+                                );
+                                let earliest_contiguous_height =
+                                    self.blockchain.earliest_contiguous_height();
+                                let latest_height = self.blockchain.get_latest_block().height;
+
+                                let highest_served_height = blocks.last().map(|block| block.height);
+                                let has_more = highest_served_height
+                                    .map(
+                                        |height| height < self.blockchain.get_latest_block().height
+                                    )
+                                    .unwrap_or(false);
+
+                                let next_height = if let Some(height) = highest_served_height {
+                                    if has_more { Some(height.saturating_add(1)) } else { None }
+                                } else if
+                                    request.from_height < earliest_contiguous_height &&
+                                    earliest_contiguous_height <= latest_height
+                                {
+                                    Some(earliest_contiguous_height)
+                                } else {
+                                    None
+                                };
+
+                                vec![NodeAction::SendFrame {
+                                    peer,
+                                    frame: NetworkMessage::SyncResponse(SyncResponse {
+                                        blocks,
+                                        has_more,
+                                        next_height,
+                                    }).to_bytes(),
+                                }]
+                            }
+                            NetworkMessage::SyncResponse(response) => {
+                                let mut actions = Vec::new();
+
+                                let completed_requests = self.pending_requests
+                                    .iter()
+                                    .filter(|request| request.peer == peer)
+                                    .cloned()
+                                    .collect::<Vec<_>>();
+                                self.pending_requests.retain(|request| request.peer != peer);
+
+                                for block in response.blocks {
+                                    actions.extend(self.ingest_block(peer, block));
+                                }
+
+                                if let Some(next_height) = response.next_height {
+                                    for request in &completed_requests {
+                                        if
+                                            let Some(action) = self.continue_request(
+                                                request,
+                                                next_height
+                                            )
+                                        {
+                                            actions.push(action);
+                                        }
+                                    }
+                                }
+
+                                if actions.is_empty() {
+                                    vec![NodeAction::FrameReceived { peer }]
+                                } else {
+                                    actions
+                                }
+                            }
+                            NetworkMessage::AnnounceResponse(_) =>
+                                vec![NodeAction::FrameReceived { peer }],
+                        }
+                    Err(_) =>
+                        vec![NodeAction::ReportEvent {
                             message: "invalid frame",
-                        }];
-                    }
-                };
-
-                match message {
-                    NetworkMessage::AnnounceRequest(request) =>
-                        match request.kind {
-                            AnnounceKind::NewBlock(block) => self.ingest_block(peer, block),
-                            AnnounceKind::NewTransaction(tx) => {
-                                match self.blockchain.add_transaction(tx.clone()) {
-                                    Ok(true) => self.relay_transaction(peer, &tx),
-                                    Ok(false) => Vec::new(),
-                                    Err(error) => vec![NodeAction::ReportEvent { message: error }],
-                                }
-                            }
-                        }
-                    NetworkMessage::SyncRequest(request) => {
-                        let blocks = self.blockchain.get_blocks(
-                            request.from_height,
-                            request.to_height
-                        );
-                        let earliest_contiguous_height =
-                            self.blockchain.earliest_contiguous_height();
-                        let latest_height = self.blockchain.get_latest_block().height;
-
-                        let highest_served_height = blocks.last().map(|block| block.height);
-                        let has_more = highest_served_height
-                            .map(|height| height < self.blockchain.get_latest_block().height)
-                            .unwrap_or(false);
-
-                        let next_height = if let Some(height) = highest_served_height {
-                            if has_more { Some(height.saturating_add(1)) } else { None }
-                        } else if
-                            request.from_height < earliest_contiguous_height &&
-                            earliest_contiguous_height <= latest_height
-                        {
-                            Some(earliest_contiguous_height)
-                        } else {
-                            None
-                        };
-
-                        vec![NodeAction::SendFrame {
-                            peer,
-                            frame: NetworkMessage::SyncResponse(SyncResponse {
-                                blocks,
-                                has_more,
-                                next_height,
-                            }).to_bytes(),
-                        }]
-                    }
-                    NetworkMessage::SyncResponse(response) => {
-                        let mut actions = Vec::new();
-
-                        let completed_requests = self.pending_requests
-                            .iter()
-                            .filter(|request| request.peer == peer)
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        self.pending_requests.retain(|request| request.peer != peer);
-
-                        for block in response.blocks {
-                            actions.extend(self.ingest_block(peer, block));
-                        }
-
-                        if let Some(next_height) = response.next_height {
-                            for request in &completed_requests {
-                                if let Some(action) = self.continue_request(request, next_height) {
-                                    actions.push(action);
-                                }
-                            }
-                        }
-
-                        if actions.is_empty() {
-                            vec![NodeAction::FrameReceived { peer }]
-                        } else {
-                            actions
-                        }
-                    }
-                    NetworkMessage::AnnounceResponse(_) => vec![NodeAction::FrameReceived { peer }],
+                        }],
                 }
             }
 
@@ -376,7 +400,7 @@ impl NodeEngine {
             }
 
             NodeInput::StorageLoaded { block_hash, state_bytes } => {
-                let Some((parent_peer, parent_height)) = self.pending_blocks
+                if let Some((parent_peer, parent_height)) = self.pending_blocks
                     .get(&block_hash)
                     .and_then(|parked_blocks|
                         parked_blocks
@@ -384,26 +408,23 @@ impl NodeEngine {
                             .map(|parked_block| {
                                 (parked_block.peer, parked_block.block.height.saturating_sub(1))
                             })
-                    ) else {
-                    return vec![NodeAction::ReportEvent {
-                        message: "unexpected snapshot result",
-                    }];
-                };
-
-                let Some(state_bytes) = state_bytes else {
-                    return self.request_parent_block(parent_peer, parent_height);
-                };
-
-                let loaded_state = match State::from_bytes(&state_bytes) {
-                    Ok(state) => state,
-                    Err(_) => {
-                        return vec![NodeAction::ReportEvent {
-                            message: "invalid snapshot bytes",
-                        }];
+                    )
+                {
+                    if let Some(state_bytes) = state_bytes {
+                        match State::from_bytes(&state_bytes) {
+                            Ok(state) => self.import_parked_blocks(block_hash, &state),
+                            Err(_) => vec![NodeAction::ReportEvent {
+                                message: "invalid snapshot bytes",
+                            }],
+                        }
+                    } else {
+                        self.request_parent_block(parent_peer, parent_height)
                     }
-                };
-
-                self.import_parked_blocks(block_hash, &loaded_state)
+                } else {
+                    vec![NodeAction::ReportEvent {
+                        message: "unexpected snapshot result",
+                    }]
+                }
             }
 
             NodeInput::PersistCompleted { persist_type } => {
@@ -413,7 +434,13 @@ impl NodeEngine {
             NodeInput::ImportRequested { peer, from_height, to_height } => {
                 vec![self.queue_block_request(peer, from_height, to_height)]
             }
+        };
+
+        if let Some(action) = self.sync_wake_action() {
+            actions.push(action);
         }
+
+        actions
     }
 }
 
@@ -635,7 +662,7 @@ mod tests {
             state_bytes: None,
         });
 
-        assert_eq!(actions.len(), 2);
+        assert_eq!(actions.len(), 3);
         match &actions[0] {
             NodeAction::ReportEvent { message } => {
                 assert_eq!(*message, "parent snapshot missing");
@@ -650,6 +677,7 @@ mod tests {
             }
             _ => panic!("expected RequestBlocks action"),
         }
+        assert!(matches!(actions[2], NodeAction::ScheduleWake { at_ms: 30_000 }));
     }
 
     #[test]
@@ -958,8 +986,10 @@ mod tests {
         let peer = [6u8; 32];
 
         let mut engine = NodeEngine::new(Blockchain::new().unwrap());
-        engine.step(NodeInput::Tick { now_ms: 1_000 });
-        engine.step(NodeInput::ImportRequested {
+        let tick_actions = engine.step(NodeInput::Tick { now_ms: 1_000 });
+        assert!(tick_actions.is_empty());
+
+        let request_actions = engine.step(NodeInput::ImportRequested {
             peer,
             from_height: 1,
             to_height: 1,
@@ -967,12 +997,14 @@ mod tests {
 
         assert_eq!(engine.pending_requests.len(), 1);
         assert_eq!(engine.pending_requests[0].deadline_ms, 31_000);
+        assert_eq!(request_actions.len(), 2);
+        assert!(matches!(request_actions[0], NodeAction::RequestBlocks { .. }));
+        assert!(matches!(request_actions[1], NodeAction::ScheduleWake { at_ms: 31_000 }));
 
         let actions = engine.step(NodeInput::Tick { now_ms: 31_000 });
 
-        assert_eq!(actions.len(), 2);
-        assert!(matches!(actions[0], NodeAction::ScheduleWake { at_ms: 32_000 }));
-        assert!(matches!(actions[1], NodeAction::ReportEvent { message: "We have a tick" }));
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(actions[0], NodeAction::CancelWake));
         assert!(engine.pending_requests.is_empty());
     }
 

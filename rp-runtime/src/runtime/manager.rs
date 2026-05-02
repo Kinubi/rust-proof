@@ -193,6 +193,8 @@ impl NodeManager {
                 self.wake_tx
                     .send(WakeCommand::Schedule { at_ms }).await
                     .map_err(RuntimeError::wake_send),
+            NodeAction::CancelWake =>
+                self.wake_tx.send(WakeCommand::Cancel).await.map_err(RuntimeError::wake_send),
             NodeAction::SendFrame { peer, frame } =>
                 self.network_tx
                     .send(NetworkCommand::SendFrame { peer, frame }).await
