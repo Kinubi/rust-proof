@@ -18,7 +18,6 @@ use libp2p::{
     swarm::{ NetworkBehaviour, SwarmEvent },
     tcp,
     yamux,
-    Multiaddr,
     PeerId,
     StreamProtocol,
     Swarm,
@@ -51,7 +50,10 @@ use rp_node::{
 use serde::{ Deserialize, Serialize };
 
 use crate::{
-    network::codec::postcard::{ read_postcard_frame, write_postcard_frame },
+    network::{
+        codec::postcard::{ read_postcard_frame, write_postcard_frame },
+        config::{ DEFAULT_MAX_FRAME_LEN, NetworkConfig },
+    },
     runtime::{
         errors::RuntimeError,
         manager::{ EventTx, NetworkCommand, NetworkRx, RuntimeEvent },
@@ -59,11 +61,6 @@ use crate::{
 };
 
 const TAG: &str = "network";
-const DEFAULT_LISTEN_ADDR: &str = "/ip4/0.0.0.0/tcp/4001";
-const DEFAULT_MAX_FRAME_LEN: u32 = 64 * 1024;
-const DEFAULT_MAX_BLOCKS_PER_CHUNK: u16 = 8;
-const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 10;
-const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 const GOSSIPSUB_ANNOUNCE_TOPIC: &str = "rust-proof/announce";
 const NODE_IDENTITY_FILE: &str = "node_identity.bin";
 const TRANSPORT_IDENTITY_FILE: &str = "transport_identity.bin";
@@ -72,61 +69,6 @@ const IDENTIFY_AGENT_VERSION: &str = "rp-runtime/0.1.0";
 const NODE_HELLO_PROTOCOL: &str = "/rust-proof/node-hello/1";
 const SYNC_PROTOCOL: &str = "/rust-proof/sync/1";
 const ANNOUNCE_PROTOCOL: &str = "/rust-proof/announce/1";
-
-#[derive(Debug, Clone)]
-struct NetworkConfig {
-    listen_addr: Multiaddr,
-    bootstrap_addrs: Vec<Multiaddr>,
-    request_timeout: Duration,
-    max_frame_len: u32,
-    max_blocks_per_chunk: u16,
-}
-
-impl NetworkConfig {
-    fn from_env() -> Result<Self, RuntimeError> {
-        let listen_addr = std::env
-            ::var("RP_RUNTIME_LISTEN_ADDR")
-            .unwrap_or_else(|_| DEFAULT_LISTEN_ADDR.to_string())
-            .parse::<Multiaddr>()
-            .map_err(|_| RuntimeError::config("invalid RP_RUNTIME_LISTEN_ADDR"))?;
-
-        let bootstrap_addrs = match std::env::var("RP_RUNTIME_BOOTSTRAP_PEERS") {
-            Ok(value) =>
-                value
-                    .split(',')
-                    .filter_map(|entry| {
-                        let trimmed = entry.trim();
-                        if trimmed.is_empty() {
-                            None
-                        } else {
-                            Some(
-                                trimmed
-                                    .parse::<Multiaddr>()
-                                    .map_err(|_|
-                                        RuntimeError::config("invalid RP_RUNTIME_BOOTSTRAP_PEERS")
-                                    )
-                            )
-                        }
-                    })
-                    .collect::<Result<Vec<_>, _>>()?,
-            Err(_) => Vec::new(),
-        };
-
-        let request_timeout_secs = std::env
-            ::var("RP_RUNTIME_REQUEST_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_REQUEST_TIMEOUT_SECS);
-
-        Ok(Self {
-            listen_addr,
-            bootstrap_addrs,
-            request_timeout: Duration::from_secs(request_timeout_secs),
-            max_frame_len: DEFAULT_MAX_FRAME_LEN,
-            max_blocks_per_chunk: DEFAULT_MAX_BLOCKS_PER_CHUNK,
-        })
-    }
-}
 
 struct HostNodeIdentity {
     signing_key: SigningKey,
@@ -552,13 +494,10 @@ impl NetworkManager {
             }
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 debug!(target: TAG, "connection established with {peer_id}");
-                if
-                    let Some(address) = match &endpoint {
-                        ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
-                        ConnectedPoint::Listener { send_back_addr, .. } =>
-                            Some(send_back_addr.clone()),
-                    } 
-                {
+                if let Some(address) = match &endpoint {
+                    ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
+                    ConnectedPoint::Listener { send_back_addr, .. } => Some(send_back_addr.clone()),
+                } {
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                 }
                 if
@@ -968,9 +907,7 @@ fn build_swarm(
             })
         })
         .map_err(RuntimeError::io_other)?
-        .with_swarm_config(|cfg| {
-            cfg.with_idle_connection_timeout(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS))
-        })
+        .with_swarm_config(|cfg| { cfg.with_idle_connection_timeout(config.idle_timeout) })
         .build();
 
     swarm.listen_on(config.listen_addr.clone()).map_err(RuntimeError::io_other)?;
@@ -1131,13 +1068,15 @@ mod tests {
 
     use std::time::Duration as StdDuration;
 
-    use libp2p::swarm::SwarmEvent;
+    use libp2p::{ Multiaddr, swarm::SwarmEvent };
     use rp_core::{
         crypto::{ Signer, SigningKey },
         models::transaction::{ Transaction, TransactionData },
     };
     use tempfile::tempdir;
     use tokio::{ sync::{ mpsc, oneshot }, time::timeout };
+
+    use crate::network::config::DEFAULT_MAX_BLOCKS_PER_CHUNK;
 
     #[derive(NetworkBehaviour)]
     struct MockEmbeddedBehaviour {
@@ -1386,9 +1325,7 @@ mod tests {
         let config = NetworkConfig {
             listen_addr: "/ip4/127.0.0.1/tcp/0".parse().expect("runtime listen addr should parse"),
             bootstrap_addrs: vec![mock_peer.listen_addr.clone()],
-            request_timeout: Duration::from_secs(10),
-            max_frame_len: DEFAULT_MAX_FRAME_LEN,
-            max_blocks_per_chunk: DEFAULT_MAX_BLOCKS_PER_CHUNK,
+            ..NetworkConfig::default()
         };
 
         let (event_tx, mut event_rx) = mpsc::channel(32);

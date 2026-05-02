@@ -2,7 +2,11 @@ use std::io::{ Error, ErrorKind };
 
 use futures::io::{ AsyncRead, AsyncWrite, AsyncWriteExt };
 use log::debug;
-use rp_codec::length_prefixed::{ decode_length_prefix, encode_length_prefixed, read_length_prefixed_frame };
+use rp_codec::length_prefixed::{
+    decode_length_prefix,
+    encode_length_prefixed,
+    read_length_prefixed_frame,
+};
 
 use crate::runtime::errors::RuntimeError;
 
@@ -43,7 +47,9 @@ pub async fn read_protocol<S>(stream: &mut S, max_len: usize) -> Result<String, 
     let frame = read_length_prefixed_frame(stream, frame_limit).await.map_err(
         RuntimeError::NetworkError
     )?;
-    let (_, payload) = decode_length_prefix(&frame, frame_limit).map_err(RuntimeError::NetworkError)?;
+    let (_, payload) = decode_length_prefix(&frame, frame_limit).map_err(
+        RuntimeError::NetworkError
+    )?;
     let mut line = payload.to_vec();
 
     if !line.ends_with(b"\n") {
