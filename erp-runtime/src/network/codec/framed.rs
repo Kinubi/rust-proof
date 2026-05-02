@@ -13,10 +13,9 @@ pub async fn write_postcard_frame<S, T>(
     stream: &mut S,
     value: &T,
     max_len: u32
-) -> Result<(), RuntimeError>
-where
-    S: futures::io::AsyncWrite + Unpin,
-    T: Serialize + DeserializeOwned,
+)
+    -> Result<(), RuntimeError>
+    where S: futures::io::AsyncWrite + Unpin, T: Serialize + DeserializeOwned
 {
     let payload = PostcardCodec::<T>::encode(value)?;
     let frame = encode_length_prefixed(&payload, max_len)?;
@@ -25,12 +24,10 @@ where
 }
 
 pub async fn read_postcard_frame<S, T>(stream: &mut S, max_len: u32) -> Result<T, RuntimeError>
-where
-    S: futures::io::AsyncRead + Unpin,
-    T: Serialize + DeserializeOwned,
+    where S: futures::io::AsyncRead + Unpin, T: Serialize + DeserializeOwned
 {
-    rp_codec::postcard::read_postcard_frame(stream, max_len)
-        .await
+    rp_codec::postcard
+        ::read_postcard_frame(stream, max_len).await
         .map_err(RuntimeError::NetworkError)
 }
 
@@ -38,10 +35,9 @@ pub async fn read_length_prefixed_frame<S>(
     stream: &mut S,
     max_len: u32
 ) -> Result<Vec<u8>, RuntimeError>
-where
-    S: futures::io::AsyncRead + Unpin,
+    where S: futures::io::AsyncRead + Unpin
 {
-    rp_codec::length_prefixed::read_length_prefixed_frame(stream, max_len)
-        .await
+    rp_codec::length_prefixed
+        ::read_length_prefixed_frame(stream, max_len).await
         .map_err(RuntimeError::NetworkError)
 }

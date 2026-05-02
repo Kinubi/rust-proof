@@ -365,11 +365,7 @@ impl NetworkManager {
         )?;
         let mut swarm = build_swarm(transport_keypair, &config)?;
         let announce_topic = gossipsub::IdentTopic::new(GOSSIPSUB_ANNOUNCE_TOPIC);
-        swarm
-            .behaviour_mut()
-            .gossipsub
-            .subscribe(&announce_topic)
-            .map_err(RuntimeError::io_other)?;
+        swarm.behaviour_mut().gossipsub.subscribe(&announce_topic).map_err(RuntimeError::io_other)?;
 
         Ok(Self {
             config,
@@ -433,11 +429,13 @@ impl NetworkManager {
 
                 let peers = self.peer_by_node.keys().copied().collect::<Vec<_>>();
                 for peer in peers {
-                    if !self
-                        .peer_by_node
-                        .get(&peer)
-                        .map(|transport_peer| self.host_transport_peers.contains(transport_peer))
-                        .unwrap_or(false)
+                    if
+                        !self.peer_by_node
+                            .get(&peer)
+                            .map(|transport_peer|
+                                self.host_transport_peers.contains(transport_peer)
+                            )
+                            .unwrap_or(false)
                     {
                         self.send_frame(peer, frame.clone())?;
                     }
@@ -554,10 +552,13 @@ impl NetworkManager {
             }
             SwarmEvent::ConnectionEstablished { peer_id, endpoint, .. } => {
                 debug!(target: TAG, "connection established with {peer_id}");
-                if let Some(address) = match &endpoint {
-                    ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
-                    ConnectedPoint::Listener { send_back_addr, .. } => Some(send_back_addr.clone()),
-                } {
+                if
+                    let Some(address) = (match &endpoint {
+                        ConnectedPoint::Dialer { address, .. } => Some(address.clone()),
+                        ConnectedPoint::Listener { send_back_addr, .. } =>
+                            Some(send_back_addr.clone()),
+                    })
+                {
                     self.swarm.behaviour_mut().kademlia.add_address(&peer_id, address);
                 }
                 if
@@ -679,7 +680,9 @@ impl NetworkManager {
                         self.swarm
                             .behaviour_mut()
                             .node_hello.send_response(channel, response)
-                            .map_err(|_| RuntimeError::io_other("failed to send node hello response"))?;
+                            .map_err(|_|
+                                RuntimeError::io_other("failed to send node hello response")
+                            )?;
                         self.register_verified_peer(peer, verified).await?;
                     }
                     request_response::Message::Response { response, .. } => {
@@ -727,7 +730,9 @@ impl NetworkManager {
                             self.swarm
                                 .behaviour_mut()
                                 .sync.send_response(channel, empty)
-                                .map_err(|_| RuntimeError::io_other("failed to send fallback sync response"))?;
+                                .map_err(|_|
+                                    RuntimeError::io_other("failed to send fallback sync response")
+                                )?;
                             return Ok(());
                         };
 
@@ -797,7 +802,9 @@ impl NetworkManager {
                         self.swarm
                             .behaviour_mut()
                             .announce.send_response(channel, AnnounceResponse { accepted })
-                            .map_err(|_| RuntimeError::io_other("failed to send announce response"))?;
+                            .map_err(|_|
+                                RuntimeError::io_other("failed to send announce response")
+                            )?;
                     }
                     request_response::Message::Response { response, .. } => {
                         let Some(node_peer) = self.node_by_transport.get(&peer).copied() else {
@@ -911,7 +918,6 @@ impl NetworkManager {
             signature: self.node_identity.build_signature(&transcript_bytes),
         })
     }
-
 }
 
 fn build_swarm(

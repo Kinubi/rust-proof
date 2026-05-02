@@ -1,6 +1,6 @@
-use std::io::{self, ErrorKind};
+use std::io::{ self, ErrorKind };
 
-use futures::io::{AsyncRead, AsyncReadExt};
+use futures::io::{ AsyncRead, AsyncReadExt };
 
 pub fn encode_length_prefixed(payload: &[u8], max_len: u32) -> io::Result<Vec<u8>> {
     if payload.len() > (max_len as usize) {
@@ -18,9 +18,11 @@ pub fn encode_length_prefixed(payload: &[u8], max_len: u32) -> io::Result<Vec<u8
 }
 
 pub fn decode_length_prefix(input: &[u8], max_len: u32) -> io::Result<(usize, &[u8])> {
-    let (payload_len, remaining) = unsigned_varint::decode::u32(input).map_err(|error| {
-        io::Error::new(ErrorKind::InvalidData, format!("invalid length prefix: {error}"))
-    })?;
+    let (payload_len, remaining) = unsigned_varint::decode
+        ::u32(input)
+        .map_err(|error| {
+            io::Error::new(ErrorKind::InvalidData, format!("invalid length prefix: {error}"))
+        })?;
 
     if payload_len > max_len {
         return Err(
@@ -43,12 +45,11 @@ pub fn decode_length_prefix(input: &[u8], max_len: u32) -> io::Result<(usize, &[
 }
 
 pub fn decode_length_prefixed_payload_len(prefix: &[u8], max_len: u32) -> io::Result<usize> {
-    let (payload_len, _) = unsigned_varint::decode::u32(prefix).map_err(|error| {
-        io::Error::new(
-            ErrorKind::InvalidData,
-            format!("invalid frame length prefix: {error}")
-        )
-    })?;
+    let (payload_len, _) = unsigned_varint::decode
+        ::u32(prefix)
+        .map_err(|error| {
+            io::Error::new(ErrorKind::InvalidData, format!("invalid frame length prefix: {error}"))
+        })?;
 
     if payload_len > max_len {
         return Err(
@@ -60,8 +61,7 @@ pub fn decode_length_prefixed_payload_len(prefix: &[u8], max_len: u32) -> io::Re
 }
 
 pub async fn read_length_prefixed_frame<S>(stream: &mut S, max_len: u32) -> io::Result<Vec<u8>>
-where
-    S: AsyncRead + Unpin,
+    where S: AsyncRead + Unpin
 {
     let mut prefix = [0u8; 5];
     let mut prefix_len = 0usize;

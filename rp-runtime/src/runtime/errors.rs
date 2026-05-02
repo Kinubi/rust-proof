@@ -1,4 +1,4 @@
-use std::{fmt::Display, io::Error};
+use std::{ fmt::Display, io::Error };
 
 use tokio::sync::mpsc::error;
 use rp_node::errors::{ ContractError, NodeError };
