@@ -5,22 +5,30 @@ edition = "2024"
 publish = false
 
 [dependencies]
+rp-codec = { path = "../rp-codec" }
 rp-core = { path = "../rp-core" }
 rp-node = { path = "../rp-node" }
 tokio = { version = "1.49.0", features = ["full"] }
 sled = "0.34.7"
+postcard = { version = "1", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", features = ["derive"] }
+rand = "0.8.5"
+env_logger = "0.11"
+async-trait = "0.1"
 libp2p = { version = "0.56.0", features = [
 	"tokio",
 	"gossipsub",
 	"kad",
 	"tcp",
 	"noise",
+	"ping",
 	"yamux",
 	"macros",
 	"request-response",
-	"json",
+	"identify",
 ] }
-serde_json = "1.0.149"
+libp2p-identity = { version = "0.2.13", features = ["ecdsa"] }
+log = "0.4.29"
 
 [dev-dependencies]
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "serde"] }

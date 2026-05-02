@@ -1,6 +1,6 @@
 use core::marker::PhantomData;
 
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{ Serialize, de::DeserializeOwned };
 
 use crate::runtime::errors::RuntimeError;
 
@@ -11,17 +11,16 @@ pub trait ValueCodec<T> {
 
 pub struct PostcardCodec<T>(PhantomData<T>);
 
-impl<T> ValueCodec<T> for PostcardCodec<T>
-where
-    T: Serialize + DeserializeOwned,
-{
+impl<T> ValueCodec<T> for PostcardCodec<T> where T: Serialize + DeserializeOwned {
     fn encode(item: &T) -> Result<Vec<u8>, RuntimeError> {
-        postcard::to_allocvec(item)
+        rp_codec::postcard
+            ::encode_postcard(item)
             .map_err(|_| RuntimeError::crypto("failed to serialize postcard payload"))
     }
 
     fn decode(bytes: &[u8]) -> Result<T, RuntimeError> {
-        postcard::from_bytes(bytes)
+        rp_codec::postcard
+            ::decode_postcard(bytes)
             .map_err(|_| RuntimeError::crypto("failed to deserialize postcard payload"))
     }
 }

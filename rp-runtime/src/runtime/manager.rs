@@ -1,5 +1,4 @@
-use futures::channel::mpsc;
-use futures::{ SinkExt, StreamExt };
+use tokio::sync::mpsc;
 use log::info;
 use rp_core::models::block::Block;
 use rp_node::contract::{ BlockHash, NodeAction, NodeInput, PeerId };
@@ -113,7 +112,7 @@ impl NodeManager {
             .map_err(RuntimeError::storage_send)?;
 
         loop {
-            let Some(event) = self.event_rx.next().await else {
+            let Some(event) = self.event_rx.recv().await else {
                 return Ok(());
             };
 

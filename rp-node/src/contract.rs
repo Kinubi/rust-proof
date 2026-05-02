@@ -64,6 +64,7 @@ pub enum NodeAction {
     ScheduleWake {
         at_ms: u64,
     },
+    CancelWake,
     DisconnectPeer {
         peer: PeerId,
     },

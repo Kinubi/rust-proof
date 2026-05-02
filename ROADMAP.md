@@ -69,9 +69,9 @@ Current mapping:
 
 - `rp-core/` now holds the first shared blockchain-engine slice in `no_std + alloc` form
 - `rp-node/` now holds the first shared node-engine slice, including the engine contract and import orchestration path
-- `rp-runtime/` remains a transitional host runtime shell and still needs the Phase 2 rewrite around the node contract
+- `rp-runtime/` remains a transitional host runtime shell and is now the next major runtime build target
 - `rp-client/` is the wallet application scaffold
-- `erp-runtime/` is the embedded runtime scaffold
+- `erp-runtime/` now hosts the first embedded runtime shell around `rp-node`; the remaining gap is a real host-side counterpart and end-to-end peer validation
 
 This roadmap describes the target model, while the current implementation still has transitional runtime shells and follow-on integration work.
 
@@ -220,24 +220,28 @@ The embedded runtime is a first-class peer runtime, but it is not required to be
 
 ### Objective
 
-Create the desktop or server runtime that hosts `rp-node`.
+Create the desktop or server runtime that hosts `rp-node` and serves as the first real host counterpart to `erp-runtime`.
+
+Detailed execution plan: `PHASE_3_BUILD_PLAN.md`.
 
 ### Tasks
 
-- evolve `rp-runtime/` from a crate skeleton into the real host runtime
-- wire host transport integration into the node engine boundary
-- wire host storage integration into the node engine boundary
-- provide process lifecycle, logging, and metrics
-- optionally add local control APIs and local wallet web hosting later
+- replace the transitional `rp-runtime/` skeleton with a real runtime shell around `NodeEngine`
+- replace the stale storage adapter so it matches the current `rp-node::contract::Storage` boundary
+- implement the same minimal TCP, multistream, Noise, Yamux, Identify, `NodeHello`, `Sync`, and `Announce` profile already used by `erp-runtime`
+- wire host transport, storage, timers, identity persistence, and process lifecycle into the node engine boundary
+- validate at least one end-to-end peer session between `rp-runtime` and `erp-runtime`
 
 ### Runtime policy
 
 - runtime-specific code must stay out of `rp-node`
 - runtime should be replaceable without changing node logic
+- the host runtime must be wire-compatible with the embedded runtime, not merely feature-similar
 
 ### Exit criteria
 
 - a desktop or server process can host a peer node through the shared node engine
+- `rp-runtime` can act as the first real peer counterpart for `erp-runtime`
 
 ## M5. Build `rp-client`
 

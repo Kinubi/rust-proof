@@ -1,12 +1,14 @@
 [workspace]
 resolver = "2"
 members = [
+    "rp-codec",
     "rp-core",
     "rp-node",
     "rp-runtime",
     "rp-client",
 ]
 default-members = [
+    "rp-codec",
     "rp-core",
     "rp-node",
     "rp-runtime",
